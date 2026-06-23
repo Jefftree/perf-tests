@@ -1,0 +1,8 @@
+# Presubmit 5k scale job, staged locally from pr-logs (incl. failed builds) for
+# debugging the demo. Production perfdash does not track presubmits, so the
+# prefix is assigned here.
+periodics:
+- name: pull-kubernetes-gce-master-scale-performance-5000
+  tags:
+  - "perfDashPrefix: pull-gce-5000Nodes"
+  - "perfDashJobType: performance"

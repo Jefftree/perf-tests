@@ -1,0 +1,7 @@
+# Ingest the real gce 5000-node scalability job straight from the public GCS
+# bucket (anonymous, no fixture). prefix/type mirror the production perfdash tags.
+periodics:
+- name: ci-kubernetes-e2e-gce-scale-performance-5000
+  tags:
+  - "perfDashPrefix: gce-5000Nodes"
+  - "perfDashJobType: performance"

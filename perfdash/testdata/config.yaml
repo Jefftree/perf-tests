@@ -1,0 +1,8 @@
+# Minimal perfdash prow-config for the local test/parity run.
+# Drives both the legacy perfdash (--www) and the new ingester (--vmImportURL)
+# against the downloaded fixture for ci-kubernetes-e2e-gce-scale-performance-100.
+periodics:
+- name: ci-kubernetes-e2e-gce-scale-performance-100
+  tags:
+  - "perfDashPrefix: gce-100Nodes"
+  - "perfDashJobType: performance"

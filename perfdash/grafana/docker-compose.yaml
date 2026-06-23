@@ -1,0 +1,46 @@
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.111.0
+    container_name: victoriametrics
+    ports:
+      - "8428:8428"
+    volumes:
+      - victoriametrics-data:/victoria-metrics-data
+    command:
+      - "-retentionPeriod=10y"
+      - "-search.maxQueryDuration=60s"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8428/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - perfdash
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_USERS_VIEWERS_CAN_EDIT: "false"
+      GF_EXPLORE_ENABLED: "false"
+      GF_SECURITY_ADMIN_PASSWORD: "perfdash-admin"
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_USERS_DEFAULT_THEME: "light"
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - victoriametrics
+    networks:
+      - perfdash
+
+volumes:
+  victoriametrics-data:
+
+networks:
+  perfdash:

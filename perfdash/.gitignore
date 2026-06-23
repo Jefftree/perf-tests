@@ -1,2 +1,4 @@
 perfdash
+perfdash-ingester
+testdata/fixture/
 *.code-workspace

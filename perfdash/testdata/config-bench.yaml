@@ -1,0 +1,27 @@
+# Benchmark-list serialization variants. These use perfDashJobType: benchmarkList
+# (NOT performance) so perfdash applies benchmarkListDescription parsers.
+periodics:
+- name: ci-kubernetes-benchmark-list
+  tags:
+  - "perfDashPrefix: benchmark list"
+  - "perfDashJobType: benchmarkList"
+- name: ci-kubernetes-benchmark-list-proto
+  tags:
+  - "perfDashPrefix: benchmark list proto"
+  - "perfDashJobType: benchmarkList"
+- name: ci-kubernetes-benchmark-list-cbor
+  tags:
+  - "perfDashPrefix: benchmark list cbor"
+  - "perfDashJobType: benchmarkList"
+- name: ci-kubernetes-benchmark-list-json-pretty
+  tags:
+  - "perfDashPrefix: benchmark list json-pretty"
+  - "perfDashJobType: benchmarkList"
+- name: ci-kubernetes-benchmark-list-table
+  tags:
+  - "perfDashPrefix: benchmark list table"
+  - "perfDashJobType: benchmarkList"
+- name: ci-kubernetes-benchmark-list-yaml
+  tags:
+  - "perfDashPrefix: benchmark list yaml"
+  - "perfDashJobType: benchmarkList"

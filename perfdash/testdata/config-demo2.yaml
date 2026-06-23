@@ -1,0 +1,31 @@
+# Second scoped demo batch, run in parallel with config-demo.yaml: AWS 5k
+# scalability plus the benchmark-list serialization variants. Anonymous GCS.
+periodics:
+- name: ci-kubernetes-e2e-kops-aws-scale-amazonvpc-using-cl2
+  tags:
+  - "perfDashPrefix: aws-5000Nodes"
+  - "perfDashJobType: performance"
+- name: ci-kubernetes-benchmark-list
+  tags:
+  - "perfDashPrefix: benchmark list"
+  - "perfDashJobType: performance"
+- name: ci-kubernetes-benchmark-list-proto
+  tags:
+  - "perfDashPrefix: benchmark list proto"
+  - "perfDashJobType: performance"
+- name: ci-kubernetes-benchmark-list-cbor
+  tags:
+  - "perfDashPrefix: benchmark list cbor"
+  - "perfDashJobType: performance"
+- name: ci-kubernetes-benchmark-list-json-pretty
+  tags:
+  - "perfDashPrefix: benchmark list json-pretty"
+  - "perfDashJobType: performance"
+- name: ci-kubernetes-benchmark-list-table
+  tags:
+  - "perfDashPrefix: benchmark list table"
+  - "perfDashJobType: performance"
+- name: ci-kubernetes-benchmark-list-yaml
+  tags:
+  - "perfDashPrefix: benchmark list yaml"
+  - "perfDashJobType: performance"

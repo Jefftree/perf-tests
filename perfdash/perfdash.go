@@ -60,10 +60,12 @@ var (
 	awsRegion = pflag.String("aws-region", "us-west-2", "AWS region of the S3 bucket")
 
 	allowParsersForAllTests = pflag.Bool("allow-parsers-matching-all-tests", true, "Allow parsers for common measurement matching any test name")
+
+	vmImportURL = pflag.String("vmImportURL", "", "If non-empty, POST all parsed data to this VictoriaMetrics /api/v1/import endpoint and exit (one-shot ingester mode)")
 )
 
 func initDownloaderOptions() {
-	pflag.StringVar(&options.Mode, "mode", gcsMode, "Storage provider from which to download metrics from. Options are 's3' or 'gcs'. The default is 'gcs'.")
+	pflag.StringVar(&options.Mode, "mode", gcsMode, "Storage provider from which to download metrics from. Options are 's3', 'gcs' or 'local'. The default is 'gcs'.")
 	pflag.BoolVar(&options.OverrideBuildCount, "force-builds", false, "Whether to enforce number of builds to process as passed via --builds flag. "+
 		"This would override values defined by \"perfDashBuildsCount\" label on prow job")
 	pflag.IntVar(&options.DefaultBuildsCount, "builds", maxBuilds, "Total builds number")
@@ -116,6 +118,9 @@ func run() error {
 		result, err = downloader.getData()
 		if err != nil {
 			return fmt.Errorf("fetching data failed: %v", err)
+		}
+		if *vmImportURL != "" {
+			return writeToVictoriaMetrics(metricsBucket, result, *vmImportURL)
 		}
 		prettyResult, err := json.MarshalIndent(result, "", " ")
 		if err != nil {

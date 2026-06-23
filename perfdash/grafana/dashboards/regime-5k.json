@@ -1,0 +1,246 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "5k-node failure-anatomy / regime board. Surfaces the bistable cluster-LIST-pods p99 (good ~20s vs bad ~30s+ regime) against the 30s SLO, the per-resource LIST breakdown that isolates pods as the outlier, apiserver peak heap, and scheduling context, all on a shared build axis. Built on perfdash_value already in VM (no ingester changes).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "The signature metric. p99 of cluster-scope LIST pods. The dashed line is the 30s read SLO. Bistable: builds settle near a good (~20s) or bad (~30s+) regime; points above the line are SLO violations. Click a point to open its build log.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 7,
+            "showPoints": "always",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "links": [
+            {
+              "title": "Open build log",
+              "url": "https://prow.k8s.io/view/gcs/kubernetes-ci-logs/logs/${__field.labels.job}/${__field.labels.build_number}/"
+            }
+          ],
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 30000 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byFrameRefID", "options": "p99" },
+            "properties": [ { "id": "custom.lineWidth", "value": 3 } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "legend": { "calcs": ["max", "min"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "cluster LIST pods p99  —  $node  (30s SLO)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "editorMode": "code",
+          "expr": "max without (build_number) (perfdash_value{prefix=\"$node\",metric=\"LoadResponsiveness_Prometheus\",Resource=\"pods\",Verb=\"LIST\",Scope=\"cluster\",series=\"Perc99\"})",
+          "legendFormat": "p99",
+          "refId": "p99"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "editorMode": "code",
+          "expr": "max without (build_number) (perfdash_value{prefix=\"$node\",metric=\"LoadResponsiveness_Prometheus\",Resource=\"pods\",Verb=\"LIST\",Scope=\"cluster\",series=\"Perc90\"})",
+          "legendFormat": "p90",
+          "refId": "p90"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "editorMode": "code",
+          "expr": "max without (build_number) (perfdash_value{prefix=\"$node\",metric=\"LoadResponsiveness_Prometheus\",Resource=\"pods\",Verb=\"LIST\",Scope=\"cluster\",series=\"Perc50\"})",
+          "legendFormat": "p50",
+          "refId": "p50"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Request latency p99 by verb (worst resource per verb), log scale. The diagnostic contrast: in the bad regime the READ verbs (LIST/GET) blow past the 30s line while the WRITE verbs (POST/PUT/PATCH/DELETE) stay flat near 1-3s. That separation says the apiserver is not globally stalled, it is the read/watch-fanout path, not writes or etcd.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisColorMode": "text",
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "scaleDistribution": { "type": "log", "log": 10 },
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "transparent", "value": null },
+              { "color": "red", "value": 30000 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": "LIST" },
+            "properties": [ { "id": "custom.lineWidth", "value": 3 } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 10 },
+      "id": 2,
+      "options": {
+        "legend": { "calcs": ["max"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "request latency p99 by verb  —  reads vs writes",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "editorMode": "code",
+          "expr": "max without (build_number, Resource, Subresource, Scope) (perfdash_value{prefix=\"$node\",metric=\"LoadResponsiveness_Prometheus\",Verb=~\"GET|LIST|POST|PUT|PATCH|DELETE\",series=\"Perc99\"})",
+          "legendFormat": "{{Verb}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Apiserver peak memory (p99 of the resource-usage samples), MiB. Watch for a heap step that lines up with the regime change.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisColorMode": "text",
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineWidth": 2,
+            "pointSize": 6,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "mappings": [],
+          "unit": "mbytes"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 10 },
+      "id": 3,
+      "options": {
+        "legend": { "calcs": ["max"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "apiserver peak heap (p99)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "editorMode": "code",
+          "expr": "max without (build_number) (perfdash_value{prefix=\"$node\",metric=\"LoadResources\",Resource=\"memory\",series=\"99\",PodName=~\".*apiserver.*\"})",
+          "legendFormat": "{{PodName}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+      "description": "Write throughput: total mutating request count per build, by verb (summed across resources). Pairs with the latency panel: holds the offered write load roughly constant across builds, so a write-latency move is a server-side regression, not a load change.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 8, "lineWidth": 2, "pointSize": 6, "showPoints": "auto", "spanNulls": true },
+          "mappings": [],
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
+      "id": 4,
+      "options": {
+        "legend": { "calcs": ["max", "mean"], "displayMode": "table", "placement": "right", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "title": "write throughput by verb  (total request count)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+          "editorMode": "code",
+          "expr": "sum without (build_number, Resource, Subresource, Scope) (perfdash_value{prefix=\"$node\",metric=\"LoadRequestCount_Prometheus\",Verb=~\"POST|PUT|PATCH|DELETE\",series=\"RequestCount\"})",
+          "legendFormat": "{{Verb}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": ["perfdash", "scale", "5k"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "gce-5000Nodes", "value": "gce-5000Nodes" },
+        "datasource": { "type": "prometheus", "uid": "victoriametrics" },
+        "definition": "label_values(perfdash_value, prefix)",
+        "includeAll": false,
+        "label": "Node count / job",
+        "name": "node",
+        "options": [],
+        "query": { "qryType": 1, "query": "label_values(perfdash_value, prefix)", "refId": "VictoriaMetrics-node-Variable-Query" },
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": { "from": "now-1y", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "5k Scale — Failure Anatomy (regime board)",
+  "uid": "regime-5k-gce",
+  "version": 1,
+  "weekStart": ""
+}

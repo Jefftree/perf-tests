@@ -6,6 +6,16 @@ results for different nodes numbers, platform types and platform versions.
 
 Perfdash is available at http://perf-dash.k8s.io/
 
+## Grafana + VictoriaMetrics backend (work in progress)
+
+A new stack under [`grafana/`](grafana/README.md) runs **alongside** this legacy
+perfdash rather than replacing it. It reuses the exact same parsing code as a
+stateless ingester (`--vmImportURL`, see `vm_writer.go`) that writes samples
+into VictoriaMetrics, which Grafana then queries. The goal is to outlive the
+in-memory process and make the data queryable. See
+[`grafana/README.md`](grafana/README.md) for the architecture, schema, local
+`docker compose` setup, and the parity-check tooling in [`hack/`](hack/).
+
 ## Supported metrics
 
 * Responsiveness

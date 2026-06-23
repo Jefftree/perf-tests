@@ -1,0 +1,12 @@
+# Scoped demo ingest: the two GCE scalability jobs, straight from the public
+# GCS bucket (anonymous). Capped builds via --builds/--force-builds for a fast,
+# current dataset.
+periodics:
+- name: ci-kubernetes-e2e-gce-scale-performance-100
+  tags:
+  - "perfDashPrefix: gce-100Nodes"
+  - "perfDashJobType: performance"
+- name: ci-kubernetes-e2e-gce-scale-performance-5000
+  tags:
+  - "perfDashPrefix: gce-5000Nodes"
+  - "perfDashJobType: performance"

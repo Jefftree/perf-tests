@@ -1,0 +1,80 @@
+# VictoriaMetrics: the time-series store that holds every perfdash sample
+# (metric __name__ "perfdash_value", differentiated by labels). The ingester
+# CronJob writes here via /api/v1/import; Grafana reads via the Prometheus API.
+#
+# Runs alongside the legacy perfdash Deployment, it does not replace it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: victoriametrics
+  namespace: perfdash
+  labels:
+    app: victoriametrics
+spec:
+  selector:
+    app: victoriametrics
+  ports:
+    - name: http
+      port: 8428
+      targetPort: 8428
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: victoriametrics
+  namespace: perfdash
+  labels:
+    app: victoriametrics
+spec:
+  serviceName: victoriametrics
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victoriametrics
+  template:
+    metadata:
+      labels:
+        app: victoriametrics
+    spec:
+      containers:
+        - name: victoriametrics
+          image: victoriametrics/victoria-metrics:v1.111.0
+          args:
+            - "-storageDataPath=/victoria-metrics-data"
+            - "-retentionPeriod=10y"
+            - "-httpListenAddr=:8428"
+            - "-search.maxQueryDuration=60s"
+          ports:
+            - name: http
+              containerPort: 8428
+          volumeMounts:
+            - name: data
+              mountPath: /victoria-metrics-data
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8428
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8428
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 50Gi

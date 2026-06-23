@@ -1,0 +1,51 @@
+# perfdash ingester: the legacy perfdash binary, rebuilt with a --vmImportURL
+# flag, run as a stateless batch job instead of a long-lived web server
+# (--www=false). Each run walks the GCS logs bucket, parses the same artifacts
+# perfdash always parsed, and POSTs perfdash_value samples to VictoriaMetrics
+# via /api/v1/import. No web UI, no in-memory state.
+#
+# Runs alongside the legacy perfdash Deployment, it does not replace it.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: perfdash-ingester
+  namespace: perfdash
+  labels:
+    app: perfdash-ingester
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 540
+      template:
+        metadata:
+          labels:
+            app: perfdash-ingester
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: ingester
+              # Placeholder: replace with the rebuilt perfdash image that adds
+              # the --vmImportURL flag. Build and push from perfdash/Dockerfile.
+              image: gcr.io/k8s-staging-perf-tests/perfdash-ingester:dev
+              imagePullPolicy: Always
+              args:
+                - "--mode=gcs"
+                - "--www=false"
+                - "--logsBucket=kubernetes-ci-logs"
+                - "--logsPath=logs"
+                - "--githubConfigDir=https://api.github.com/repos/kubernetes/test-infra/contents/config/jobs/kubernetes/sig-scalability"
+                - "--allow-parsers-matching-all-tests=false"
+                - "--vmImportURL=http://victoriametrics.perfdash:8428/api/v1/import"
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: 8Gi
+                limits:
+                  cpu: "3"
+                  memory: 16Gi

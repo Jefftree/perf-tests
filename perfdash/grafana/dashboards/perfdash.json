@@ -1,0 +1,405 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Reads perfdash_value from VictoriaMetrics and reproduces the legacy perfdash UX (job/category/metric dropdowns plus dynamic label filters). Runs in parallel with the legacy perfdash.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "description": "Primary view. A normal time series over the real build finish timestamps (sample ts = finished.json timestamp). Robust against missing/duplicate build numbers. Click a point and use the data link to open the build log.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "links": [
+            {
+              "title": "Open build log",
+              "targetBlank": true,
+              "url": "https://prow.k8s.io/view/gcs/kubernetes-ci-logs/logs/${__field.labels.job}/${__field.labels.build_number}/"
+            }
+          ],
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "max without (build_number) (perfdash_value{prefix=\"$prefix\",category=\"$category\",metric=\"$metric\",Resource=\"$resource\",Verb=\"$verb\"})",
+          "instant": false,
+          "legendFormat": "{{Scope}} {{series}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Metric over time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "description": "Ordinal build-number x-axis (perfdash-style). Transform chain: (1) Labels to fields (value mode) promotes the build_number label to a field column; (2) Convert field type casts build_number to Number; (3) the Trend panel's xField option is set to build_number so it is used as the ordinal X axis. If the X mapping looks empty, fall back to Panel 1 (Metric over time), which is the default large view.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "links": [
+            {
+              "title": "Open build log",
+              "targetBlank": true,
+              "url": "https://prow.k8s.io/view/gcs/kubernetes-ci-logs/logs/${__field.labels.job}/${__field.labels.build_number}/"
+            }
+          ],
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "xField": "build_number"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "editorMode": "code",
+          "expr": "perfdash_value{prefix=\"$prefix\",category=\"$category\",metric=\"$metric\",Resource=\"$resource\",Verb=\"$verb\"}",
+          "instant": false,
+          "legendFormat": "{{Scope}} {{series}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Metric over builds",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns",
+            "keepLabels": [
+              "build_number",
+              "series",
+              "job"
+            ]
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "targetField": "build_number"
+              }
+            ],
+            "fields": {}
+          }
+        }
+      ],
+      "type": "trend"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "perfdash",
+    "scalability"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "definition": "label_values(perfdash_value, prefix)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Dashboard (job)",
+        "multi": false,
+        "name": "prefix",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(perfdash_value, prefix)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "definition": "label_values(perfdash_value{prefix=\"$prefix\"}, category)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Category",
+        "multi": false,
+        "name": "category",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(perfdash_value{prefix=\"$prefix\"}, category)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "definition": "label_values(perfdash_value{prefix=\"$prefix\",category=\"$category\"}, metric)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Metric",
+        "multi": false,
+        "name": "metric",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(perfdash_value{prefix=\"$prefix\",category=\"$category\"}, metric)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "definition": "label_values(perfdash_value{prefix=\"$prefix\",category=\"$category\",metric=\"$metric\"}, Resource)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Resource",
+        "multi": false,
+        "name": "resource",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(perfdash_value{prefix=\"$prefix\",category=\"$category\",metric=\"$metric\"}, Resource)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "definition": "label_values(perfdash_value{prefix=\"$prefix\",category=\"$category\",metric=\"$metric\",Resource=\"$resource\"}, Verb)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Verb",
+        "multi": false,
+        "name": "verb",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(perfdash_value{prefix=\"$prefix\",category=\"$category\",metric=\"$metric\",Resource=\"$resource\"}, Verb)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "filters": [],
+        "hide": 0,
+        "label": "Label filters",
+        "name": "adhoc",
+        "skipUrlSync": false,
+        "type": "adhoc"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1y",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Performance Dashboard (Grafana)",
+  "uid": "perfdash-grafana",
+  "version": 1,
+  "weekStart": ""
+}
