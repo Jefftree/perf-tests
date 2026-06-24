@@ -321,6 +321,8 @@ At a matched pre-ramp instant where goroutines/watches/uptime are identical acro
 
 (The fork also normalized by dispatch — sched-lat per 100k dispatch, PASS 0.28-0.36 vs FAIL 0.82-1.19 — but that ratio is **churn-confounded**: baseline eps churn itself differs run-to-run, so dividing by dispatch inflates the gap. Use the raw number.)
 
+**Sched-lat is not the only pre-load metric that separates — it is the one to gate on.** At the same 18:08 instant several others also split PASS from FAIL: etcd lease latency p99 (49 vs 296 ms, 6x), kubelet lease-PUT p99 (50 vs 750 ms, 15x), system-PL request execution (0.4 vs 3.0 ms, 6x), GC pause mean (1.42 vs 2.52 ms, 1.8x), and apiserver CPU/op (full table in 8.2). They look more dramatic than sched-lat's ~1.8x, but they are **not independent** of it: with the queue empty and the wake-storm still running, each is the *same* per-wakeup convoy descheduling a different goroutine (etcd-client, request handler, lease handler), and the 6-15x multipliers are **tail-compounding** (a multi-step request descheduled several times), not stronger signal. Gate on the **raw sched-lat mean** — least-confounded, clean at n=5, detector-ready (8.6) — and read lease p99 and the rest as corroboration only, never as independent predictors.
+
 ### 8.2 The clean proof: a fixed pre-load instant, identical state, no queue
 At **18:08** the cluster is fully up but **no test pods exist** (pod count flat at 10,490 = system DaemonSets, `POST pods/s = 0`) and the **APF queue is empty** (verified `inqueue=0`, equal ~490/s lease load). So it is **not** APF queue wait. The apiserver state is byte-identical across runs (goroutines ~138k, heap ~8 GB), yet 05-01 is multiples slower on **every** axis while doing **less** work:
 
