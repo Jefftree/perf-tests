@@ -40,11 +40,54 @@ KC=/tmp/watch-fanout/kubeconfig
 /tmp/wf-bin/watch-fanout drain --kubeconfig=$KC --clients=200 --mode=decode --metrics-addr=:9113
 ```
 
-`hack/local-rig.sh` finds etcd and kube-apiserver under `$K8S_ROOT` (default
-`~/workspace/kubernetes`); both paths are overridable. Nothing is compiled
-against Kubernetes -- this module is an ordinary client-go program, and the
-apiserver under test is whatever binary `$K8S_ROOT` points at. To A/B a
-Kubernetes change, rebuild `kube-apiserver` from a branch and re-run.
+## Testing a custom Kubernetes build
+
+Nothing here is compiled against Kubernetes. This module is an ordinary
+client-go program, and the apiserver under test is simply whatever binary the
+rig launches, so any build works.
+
+| variable | default | purpose |
+| --- | --- | --- |
+| `K8S_ROOT` | `~/workspace/kubernetes` | where to find etcd and kube-apiserver |
+| `APISERVER_BIN` | `$K8S_ROOT/_output/bin/kube-apiserver` | exact binary to run |
+| `ETCD_BIN` | `$K8S_ROOT/third_party/etcd/etcd` | etcd binary |
+| `APISERVER_EXTRA_FLAGS` | empty | extra apiserver flags, e.g. feature gates |
+| `APISERVER_GOMAXPROCS` | `0` (all cores) | apiserver GOMAXPROCS |
+| `RUN_DIR` | `/tmp/watch-fanout` | etcd data, certs, kubeconfig, logs |
+| `SECURE_PORT` / `ETCD_PORT` | `6443` / `2379` | ports, for running two rigs at once |
+| `APISERVER_V` | `2` | klog verbosity |
+
+Point it at a branch build:
+
+```bash
+cd ~/workspace/kubernetes && git checkout my-fix
+go build -o /tmp/apiserver-fix ./cmd/kube-apiserver
+APISERVER_BIN=/tmp/apiserver-fix \
+  APISERVER_EXTRA_FLAGS="--feature-gates=MyGate=true" \
+  ./hack/local-rig.sh
+```
+
+### A/B-ing a change
+
+Build both binaries first, then swap only the apiserver between runs. etcd data
+lives in `$RUN_DIR`, so the object population survives a restart and
+`preload` / `pods` only need to run once:
+
+```bash
+cd ~/workspace/kubernetes
+git checkout master  && go build -o /tmp/apiserver-base ./cmd/kube-apiserver
+git checkout my-fix  && go build -o /tmp/apiserver-fix  ./cmd/kube-apiserver
+
+APISERVER_BIN=/tmp/apiserver-base ./hack/local-rig.sh   # preload once, measure
+APISERVER_BIN=/tmp/apiserver-fix  ./hack/local-rig.sh   # restart, measure again
+```
+
+Compare `wf_delivery_latency_seconds` between runs. Interleave the arms rather
+than running all of one then all of the other: on this workload the p99 drifts
+enough between runs that a single A-then-B comparison is not trustworthy.
+
+Two binaries can also run side by side on different `SECURE_PORT` / `ETCD_PORT`
+/ `RUN_DIR` values, at the cost of splitting the machine's cores between them.
 
 ## Measuring delivery latency
 

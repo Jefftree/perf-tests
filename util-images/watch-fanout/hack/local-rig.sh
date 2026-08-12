@@ -29,6 +29,10 @@ APISERVER_GOMAXPROCS="${APISERVER_GOMAXPROCS:-0}"
 
 ETCD_BIN="${ETCD_BIN:-$K8S_ROOT/third_party/etcd/etcd}"
 APISERVER_BIN="${APISERVER_BIN:-$K8S_ROOT/_output/bin/kube-apiserver}"
+# Unquoted on use, so it word-splits into separate flags. Set it to pass feature
+# gates or any other apiserver flag when testing a custom build, e.g.
+#   APISERVER_EXTRA_FLAGS="--feature-gates=WatchList=true"
+APISERVER_EXTRA_FLAGS="${APISERVER_EXTRA_FLAGS:-}"
 
 for bin in "$ETCD_BIN" "$APISERVER_BIN"; do
   if [[ ! -x "$bin" ]]; then
@@ -78,7 +82,22 @@ fi
 # Static bearer token. Anonymous auth is not enough on its own -- unauthenticated
 # requests still come back 401 -- so give every client one real identity.
 TOKEN="${TOKEN:-watchfanout0000000000000000000000}"
+
+# Preserve node identities across restarts. `watch-fanout kubelet
+# --write-tokens` appends thousands of system:nodes entries here, and the
+# apiserver has to be restarted to pick them up -- so a plain overwrite would
+# delete exactly the identities the restart was for, and every simulated
+# kubelet would come back 401. awk rather than grep: on some setups grep is
+# aliased to rg, whose flags differ.
+KEEP_NODES=""
+if [[ -f "$RUN_DIR/certs/tokens.csv" ]]; then
+  KEEP_NODES=$(awk '/system:nodes/' "$RUN_DIR/certs/tokens.csv" || true)
+fi
 printf '%s,admin,admin,"system:masters"\n' "$TOKEN" >"$RUN_DIR/certs/tokens.csv"
+if [[ -n "$KEEP_NODES" ]]; then
+  printf '%s\n' "$KEEP_NODES" >>"$RUN_DIR/certs/tokens.csv"
+  echo "preserved $(printf '%s\n' "$KEEP_NODES" | wc -l | tr -d ' ') node identities"
+fi
 
 cat >"$RUN_DIR/kubeconfig" <<EOF
 apiVersion: v1
@@ -115,6 +134,7 @@ GOMAXPROCS="$APISERVER_GOMAXPROCS" "$APISERVER_BIN" \
   --max-mutating-requests-inflight 1000 \
   --profiling=true \
   --v "${APISERVER_V:-2}" \
+  ${APISERVER_EXTRA_FLAGS:-} \
   >"$RUN_DIR/logs/apiserver.log" 2>&1 &
 APISERVER_PID=$!
 
