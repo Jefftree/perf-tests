@@ -60,6 +60,12 @@ func runPods(ctx context.Context, args []string) error {
 		namespaces = fs.Int("namespaces", 50, "spread pods across this many namespaces")
 		workers    = fs.Int("workers", 64, "concurrent creators")
 		qps        = fs.Float64("qps", 4000, "client QPS")
+		// Binding is what makes pod status writes possible: the kubelet
+		// command derives its pod set from i%nodes rather than LISTing, so the
+		// two must agree on the node count. Bound pods are also the realistic
+		// shape, since an unschedulable pod never reaches the status path at
+		// all.
+		bindToNodes = fs.Int("bind-to-nodes", 0, "assign spec.nodeName round-robin over this many wf-node-* nodes; 0 leaves pods unscheduled")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -91,7 +97,7 @@ func runPods(ctx context.Context, args []string) error {
 					return
 				}
 				ns := fmt.Sprintf("%s-%03d", podNamespacePrefix, i%*namespaces)
-				_, err := client.CoreV1().Pods(ns).Create(ctx, realisticPod(ns, i), metav1.CreateOptions{})
+				_, err := client.CoreV1().Pods(ns).Create(ctx, realisticPod(ns, i, *bindToNodes), metav1.CreateOptions{})
 				switch {
 				case err == nil:
 					made.Add(1)
@@ -132,7 +138,7 @@ func runPods(ctx context.Context, args []string) error {
 //
 // Pods here are never scheduled and never run; they exist to be watched and
 // LISTed.
-func realisticPod(ns string, i int) *corev1.Pod {
+func realisticPod(ns string, i, bindToNodes int) *corev1.Pod {
 	name := fmt.Sprintf("wf-pod-%07d", i)
 	res := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
@@ -185,9 +191,12 @@ func realisticPod(ns string, i int) *corev1.Pod {
 			},
 		},
 		Spec: corev1.PodSpec{
-			// Unschedulable on purpose: this rig has no nodes, and nothing
-			// should ever try to run these.
-			NodeSelector:   map[string]string{"watch-fanout/never": "true"},
+			// Either bound to a simulated node (so the kubelet command can
+			// own it and write its status) or deliberately unschedulable.
+			// There is no scheduler here, so binding means setting nodeName
+			// directly, exactly as hollow-node does.
+			NodeName:       nodeNameFor(i, bindToNodes),
+			NodeSelector:   unschedulableSelector(bindToNodes),
 			InitContainers: []corev1.Container{initContainer("init-0"), initContainer("init-1")},
 			Containers: []corev1.Container{
 				{
@@ -223,6 +232,24 @@ func realisticPod(ns string, i int) *corev1.Pod {
 			},
 		},
 	}
+}
+
+// nodeNameFor spreads pods over the simulated nodes round-robin, matching the
+// ownership rule the kubelet command derives (see ownedPod).
+func nodeNameFor(i, bindToNodes int) string {
+	if bindToNodes <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("wf-node-%05d", i%bindToNodes)
+}
+
+// unschedulableSelector keeps unbound pods off any real scheduler that might
+// be pointed at this cluster. A bound pod needs no such guard.
+func unschedulableSelector(bindToNodes int) map[string]string {
+	if bindToNodes > 0 {
+		return nil
+	}
+	return map[string]string{"watch-fanout/never": "true"}
 }
 
 // runList issues cluster-scoped rv=0 pod LISTs, the shape that drives the

@@ -104,6 +104,43 @@ var (
 		Buckets: prometheus.ExponentialBuckets(0.001, 1.7, 22),
 	})
 
+	// Node and pod status writes, the two write sources the rig was missing.
+	//
+	// This matters more than it looks. Holding fan-out fixed and varying only
+	// kubelet lease writes moved mean delivery latency 21.3ms -> 669ms, so
+	// write throughput, not fan-out, is the dominant driver here. Leaving out
+	// the two largest production write sources understated the very mechanism
+	// the rig exists to measure.
+	//
+	// Node status is low-rate but large: a real Node status carries capacity,
+	// allocatable, conditions and the image list, so it is kilobytes per write
+	// against a lease's ~200 bytes. Kubelet posts it every
+	// NodeStatusReportFrequency (default 5m, pkg/kubelet/apis/config/v1beta1/
+	// defaults.go:141) unless something changed, so 5,000 nodes is only ~17/s.
+	// Pod status is the opposite: small writes, but one per pod transition, so
+	// it scales with churn rather than node count.
+	nodeStatusWrites = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "wf_node_status_writes_total",
+		Help: "Node status patches by outcome.",
+	}, []string{"outcome"})
+
+	nodeStatusLatency = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "wf_node_status_latency_seconds",
+		Help:    "Node status patch round-trip.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 1.7, 22),
+	})
+
+	podStatusWrites = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "wf_pod_status_writes_total",
+		Help: "Pod status patches by outcome.",
+	}, []string{"outcome"})
+
+	podStatusLatency = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "wf_pod_status_latency_seconds",
+		Help:    "Pod status patch round-trip.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 1.7, 22),
+	})
+
 	// WatchList initial-events replay: the phase the O(N)->O(1) RLock change
 	// targets. Measured per establishment, not per event.
 	watchlistInitial = promauto.NewHistogramVec(prometheus.HistogramOpts{

@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	coordv1 "k8s.io/api/coordination/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -76,6 +77,18 @@ func runKubelet(ctx context.Context, args []string) error {
 		writeTokens = fs.String("write-tokens", "", "only write a token-auth-file to this path and exit")
 		adminToken  = fs.String("admin-token", "", "admin token to preserve when writing tokens")
 		qps         = fs.Float64("qps", 20, "per-kubelet QPS")
+
+		// Node status: default 5m matches kubelet's NodeStatusReportFrequency
+		// (pkg/kubelet/apis/config/v1beta1/defaults.go:141), so 5,000 nodes is
+		// ~17 writes/s of multi-KB objects. Set it lower to stress the path.
+		registerNodes    = fs.Bool("register-nodes", true, "create a Node object per simulated kubelet")
+		nodeStatusPeriod = fs.Duration("node-status-period", 5*time.Minute, "node status post interval, kubelet default 5m; 0 disables")
+
+		// Pod status: rate is set by churn, not node count, so it is expressed
+		// directly. 0 disables. Requires pods created with --bind-to-nodes.
+		podStatusPeriod = fs.Duration("pod-status-period", 0, "interval at which each kubelet patches one of its pods' status; 0 disables")
+		podCount        = fs.Int("pod-count", 150000, "total pods in the cluster, for deriving pod ownership")
+		podNamespaces   = fs.Int("pod-namespaces", 50, "namespaces the pods are spread over, must match the pods command")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -111,7 +124,15 @@ func runKubelet(ctx context.Context, args []string) error {
 		wg.Add(1)
 		go func(id int, cfg *rest.Config) {
 			defer wg.Done()
-			runOneKubelet(ctx, id, cfg, *renew)
+			runOneKubelet(ctx, id, cfg, kubeletOpts{
+				renew:            *renew,
+				registerNode:     *registerNodes,
+				nodeStatusPeriod: *nodeStatusPeriod,
+				podStatusPeriod:  *podStatusPeriod,
+				nodes:            *nodes,
+				podCount:         *podCount,
+				podNamespaces:    *podNamespaces,
+			})
 		}(i, cfg)
 	}
 	klog.Infof("all %d kubelets started", *nodes)
@@ -119,39 +140,113 @@ func runKubelet(ctx context.Context, args []string) error {
 	return ctx.Err()
 }
 
-func runOneKubelet(ctx context.Context, id int, cfg *rest.Config, renew time.Duration) {
+type kubeletOpts struct {
+	renew            time.Duration
+	registerNode     bool
+	nodeStatusPeriod time.Duration
+	podStatusPeriod  time.Duration
+	nodes            int
+	podCount         int
+	podNamespaces    int
+}
+
+// classify records a write outcome, separating APF rejection from every other
+// failure. outcome="throttled" is a 429 from flow control, the reported
+// production symptom.
+func classify(c *prometheus.CounterVec, err error) {
+	switch {
+	case err == nil:
+		c.WithLabelValues("ok").Inc()
+	case apierrors.IsTooManyRequests(err):
+		c.WithLabelValues("throttled").Inc()
+	default:
+		c.WithLabelValues("error").Inc()
+	}
+}
+
+func runOneKubelet(ctx context.Context, id int, cfg *rest.Config, o kubeletOpts) {
 	client, err := newClient(cfg)
 	if err != nil {
 		klog.Errorf("kubelet %d: %v", id, err)
 		return
 	}
 	name := fmt.Sprintf("wf-node-%05d", id)
+	if o.registerNode {
+		if err := ensureNode(ctx, client, name); err != nil && ctx.Err() == nil {
+			klog.V(3).Infof("kubelet %d register node: %v", id, err)
+		}
+	}
 	if err := ensureLease(ctx, client, name); err != nil && ctx.Err() == nil {
 		klog.V(3).Infof("kubelet %d ensure lease: %v", id, err)
 	}
-	t := time.NewTicker(renew)
-	defer t.Stop()
+
+	// A ticker per source rather than one combined loop: the three sources run
+	// at genuinely different periods (10s / 5m / churn-driven) and a shared
+	// timer would couple them. An earlier bug in this rig came from exactly
+	// that, a shared timer left nil after its first fire.
+	lease := time.NewTicker(o.renew)
+	defer lease.Stop()
+	nodeStatusC, stopNodeStatus := optionalTick(o.nodeStatusPeriod)
+	defer stopNodeStatus()
+	podStatusC, stopPodStatus := optionalTick(o.podStatusPeriod)
+	defer stopPodStatus()
+
+	// Which pod of this kubelet's set to touch next. Rotating means the
+	// writes spread over the owned pods instead of hammering one key.
+	podTurn := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+
+		case <-lease.C:
 			start := time.Now()
 			err := renewLease(ctx, client, name)
 			leaseLatency.Observe(time.Since(start).Seconds())
-			switch {
-			case err == nil:
-				leaseWrites.WithLabelValues("ok").Inc()
-			case apierrors.IsTooManyRequests(err):
-				// This is the APF rejection being hunted: a 429 with
-				// "request is being rejected" from flow control.
-				leaseWrites.WithLabelValues("throttled").Inc()
-			default:
-				leaseWrites.WithLabelValues("error").Inc()
+			classify(leaseWrites, err)
+			if err != nil && !apierrors.IsTooManyRequests(err) {
 				klog.V(4).Infof("kubelet %d renew: %v", id, err)
+			}
+
+		case <-nodeStatusC:
+			start := time.Now()
+			err := patchNodeStatus(ctx, client, name)
+			nodeStatusLatency.Observe(time.Since(start).Seconds())
+			classify(nodeStatusWrites, err)
+			if err != nil && !apierrors.IsTooManyRequests(err) {
+				klog.V(4).Infof("kubelet %d node status: %v", id, err)
+			}
+
+		case <-podStatusC:
+			idx := id + podTurn*o.nodes
+			if idx >= o.podCount {
+				podTurn, idx = 0, id
+			}
+			podTurn++
+			if idx >= o.podCount {
+				continue
+			}
+			ns, pod := ownedPod(idx, o.podNamespaces)
+			start := time.Now()
+			err := patchPodStatus(ctx, client, ns, pod)
+			podStatusLatency.Observe(time.Since(start).Seconds())
+			classify(podStatusWrites, err)
+			if err != nil && !apierrors.IsTooManyRequests(err) {
+				klog.V(4).Infof("kubelet %d pod status %s/%s: %v", id, ns, pod, err)
 			}
 		}
 	}
+}
+
+// optionalTick returns a channel that never fires when period is 0, so a
+// disabled source needs no branch in the select. A nil channel blocks forever,
+// which is exactly the wanted behaviour in a select arm.
+func optionalTick(period time.Duration) (<-chan time.Time, func()) {
+	if period <= 0 {
+		return nil, func() {}
+	}
+	t := time.NewTicker(period)
+	return t.C, t.Stop
 }
 
 func ensureLease(ctx context.Context, c kubernetes.Interface, name string) error {

@@ -18,7 +18,7 @@ the nodes: no kubelets, no scheduler, no VMs.
 | `drain` | runs N independent watch clients, one simulated node each, with the selectors kube-proxy uses |
 | `pods` | creates N pods shaped like `CL2_REALISTIC_POD`. They are never scheduled; they exist to occupy the watch cache and to be LISTed |
 | `list` | issues cluster-scoped `rv=0` pod LISTs, streaming and discarding the body |
-| `kubelet` | runs N simulated kubelets, each with its own identity, renewing its own Lease |
+| `kubelet` | runs N simulated kubelets, each with its own identity: registers a Node, renews its Lease, posts Node status, and patches the status of the pods bound to it |
 
 ## Quick start
 
@@ -134,6 +134,40 @@ watch-fanout kubelet --kubeconfig=$KC --nodes=5000 --renew=10s
 
 Distinct identities matter: APF's flow distinguisher shards queues by user, so a
 single shared identity would collapse 5,000 kubelets into one queue.
+
+## The three kubelet write sources
+
+Write throughput, not fan-out, is what moves delivery latency here (see the
+table below: 21.3ms to 669ms from lease writes alone, at constant fan-out), so
+which writes are simulated matters as much as how many.
+
+| source | flag | default | rate at 5,000 nodes | object |
+| --- | --- | --- | --- | --- |
+| Lease renewal | `--renew` | 10s | ~500/s | 825 B |
+| Node status | `--node-status-period` | 5m | ~17/s | 9,657 B |
+| Pod status | `--pod-status-period` | off | churn-driven | pod-sized |
+
+The Node status default matches kubelet's `NodeStatusReportFrequency`
+(`pkg/kubelet/apis/config/v1beta1/defaults.go:141`), which is what governs the
+steady-state rate, not the 10s `NodeStatusUpdateFrequency`. It is low-rate but
+**large**: the patch body is only ~852 bytes, yet the watch event it produces
+carries the whole 9,657-byte Node, so it costs ~12x a lease renewal per event
+delivered. Both numbers are measured on this rig.
+
+Pod status is off by default because its rate is set by churn rather than node
+count, so there is no defensible default. It needs pods bound to nodes:
+
+```bash
+watch-fanout pods    --kubeconfig=$KC --count=150000 --bind-to-nodes=5000
+watch-fanout kubelet --kubeconfig=$KC --nodes=5000 --pod-status-period=1s \
+  --pod-count=150000 --pod-namespaces=50
+```
+
+Ownership is derived (kubelet `j` owns pods `j`, `j+nodes`, ...) rather than
+discovered, because a LIST per kubelet at 5,000 kubelets would be a large load
+of its own and would contaminate the measurement. `--bind-to-nodes`,
+`--pod-count` and `--pod-namespaces` must therefore agree with the values the
+`pods` command used.
 
 ## Drain modes
 
