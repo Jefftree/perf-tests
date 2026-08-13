@@ -104,6 +104,25 @@ var (
 		Buckets: prometheus.ExponentialBuckets(0.001, 1.7, 22),
 	})
 
+	// WatchList initial-events replay: the phase the O(N)->O(1) RLock change
+	// targets. Measured per establishment, not per event.
+	watchlistInitial = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "wf_watchlist_initial_seconds",
+		Help:    "Time from WatchList request to the initial-events-end bookmark.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 1.7, 22),
+	}, []string{"resource"})
+
+	watchlistObjects = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "wf_watchlist_objects",
+		Help:    "Objects replayed per WatchList establishment.",
+		Buckets: prometheus.ExponentialBuckets(100, 2, 10),
+	}, []string{"resource"})
+
+	watchlistErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "wf_watchlist_errors_total",
+		Help: "Failed WatchList establishments.",
+	}, []string{"resource"})
+
 	listDuration = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "wf_list_duration_seconds",
 		Help:    "Cluster-scoped rv=0 pod LIST duration.",

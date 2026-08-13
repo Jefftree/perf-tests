@@ -117,73 +117,113 @@ func runPods(ctx context.Context, args []string) error {
 	return ctx.Err()
 }
 
-// realisticPod approximates the CL2_REALISTIC_POD shape: init containers, a
-// sidecar, configmap and secret volume mounts, and a filled-in status. Target
-// is production's ~900 bytes of serialized pod, derived from 137MB per 150k-pod
-// LIST, since total LIST bytes is what drives the allocation.
+// realisticPod mirrors the CL2_REALISTIC_POD template field for field:
+// clusterloader2/testing/load/modules/reconcile-objects/deployment.yaml,
+// the $RealisticPod branches.
+//
+// Object size matters here because the watch cache deep-copies every object it
+// serves, and that copy's cost scales with the object GRAPH, not with byte
+// count. An earlier hand-rolled approximation of this pod serialized to 3,850
+// bytes against production's ~913 (137MB per 150k-pod LIST), so it was 4x too
+// fat and inflated every deep-copy measurement taken against it. The excess was
+// mostly a synthetic last-applied-configuration annotation and four fully
+// populated containers where the real template has two plus two init
+// containers.
+//
+// Pods here are never scheduled and never run; they exist to be watched and
+// LISTed.
 func realisticPod(ns string, i int) *corev1.Pod {
 	name := fmt.Sprintf("wf-pod-%07d", i)
-	labels := map[string]string{
-		"name":                       "wf-load",
-		"app":                        fmt.Sprintf("wf-app-%03d", i%200),
-		"pod-template-hash":          fmt.Sprintf("%09d", i),
-		"group":                      "load",
-		"kubernetes.io/managed-by":   managedBy,
-		"app.kubernetes.io/instance": fmt.Sprintf("inst-%05d", i%1000),
-	}
-	annotations := map[string]string{
-		"watch-fanout/purpose": "list-load target, never scheduled",
-		"kubectl.kubernetes.io/last-applied-configuration": fmt.Sprintf(
-			`{"apiVersion":"v1","kind":"Pod","metadata":{"name":%q,"namespace":%q}}`, name, ns),
-	}
 	res := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("10m"),
-			corev1.ResourceMemory: resource.MustParse("32Mi"),
+			corev1.ResourceCPU:    resource.MustParse("5m"),
+			corev1.ResourceMemory: resource.MustParse("20M"),
 		},
 	}
-	container := func(n string) corev1.Container {
+	fieldEnv := func(n, path string) corev1.EnvVar {
+		return corev1.EnvVar{Name: n, ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: path}}}
+	}
+	resEnv := func(n, r string) corev1.EnvVar {
+		return corev1.EnvVar{Name: n, ValueFrom: &corev1.EnvVarSource{
+			ResourceFieldRef: &corev1.ResourceFieldSelector{ContainerName: "main", Resource: r}}}
+	}
+	initContainer := func(n string) corev1.Container {
 		return corev1.Container{
-			Name:      n,
-			Image:     "registry.k8s.io/pause:3.9",
-			Resources: res,
-			VolumeMounts: []corev1.VolumeMount{
-				{Name: "cm", MountPath: "/etc/cm"},
-				{Name: "sec", MountPath: "/etc/sec"},
-			},
-			TerminationMessagePath:   corev1.TerminationMessagePathDefault,
-			TerminationMessagePolicy: corev1.TerminationMessageReadFile,
-			ImagePullPolicy:          corev1.PullIfNotPresent,
+			Name:    n,
+			Image:   "registry.k8s.io/e2e-test-images/agnhost:2.53",
+			Command: []string{"/bin/sh", "-c", "sleep 1"},
 		}
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name, Namespace: ns, Labels: labels, Annotations: annotations,
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				"name":                        fmt.Sprintf("wf-dep-%d", i%1000),
+				"svc":                         fmt.Sprintf("wf-svc-%d", i%1000),
+				"group":                       "load",
+				"app.kubernetes.io/name":      "payment-service",
+				"app.kubernetes.io/instance":  "payment-service-primary",
+				"app.kubernetes.io/version":   "v2.1.4",
+				"app.kubernetes.io/component": "backend",
+				"app.kubernetes.io/part-of":   "ecommerce-platform",
+				"env":                         "production",
+				"track":                       "canary",
+			},
+			Annotations: map[string]string{
+				"prometheus.io/scrape":                           "false",
+				"prometheus.io/port":                             "8080",
+				"prometheus.io/path":                             "/metrics",
+				"sidecar.istio.io/inject":                        "false",
+				"cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+				"vault.hashicorp.com/agent-inject":               "false",
+				"vault.hashicorp.com/role":                       "my-app-db-role",
+				"fluentbit.io/parser":                            "json",
+				"argocd.argoproj.io/hook":                        "PreSync",
+				"argocd.argoproj.io/hook-delete-policy":          "HookSucceeded",
+			},
 		},
 		Spec: corev1.PodSpec{
-			// Unschedulable on purpose: no node in this rig, and nothing should
-			// ever try to run these.
+			// Unschedulable on purpose: this rig has no nodes, and nothing
+			// should ever try to run these.
 			NodeSelector:   map[string]string{"watch-fanout/never": "true"},
-			InitContainers: []corev1.Container{container("init-1"), container("init-2")},
-			Containers:     []corev1.Container{container("main"), container("sidecar")},
+			InitContainers: []corev1.Container{initContainer("init-0"), initContainer("init-1")},
+			Containers: []corev1.Container{
+				{
+					Name:  "main",
+					Image: "registry.k8s.io/pause:3.9",
+					Env: []corev1.EnvVar{
+						fieldEnv("POD_NAME", "metadata.name"),
+						fieldEnv("POD_NAMESPACE", "metadata.namespace"),
+						fieldEnv("NODE_NAME", "spec.nodeName"),
+						fieldEnv("POD_IP", "status.podIP"),
+						resEnv("GOMAXPROCS", "limits.cpu"),
+						resEnv("GOMEMLIMIT", "limits.memory"),
+						{Name: "JAVA_TOOL_OPTIONS", Value: "-XX:MaxRAMPercentage=75.0"},
+						{Name: "REDIS_URL", Value: "redis://main:6379/0"},
+						{Name: "PYTHONUNBUFFERED", Value: "1"},
+						{Name: "NODE_ENV", Value: "prod"},
+					},
+					Resources: res,
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "configmap", MountPath: "/var/configmap"},
+						{Name: "secret", MountPath: "/var/secret"},
+					},
+				},
+				{Name: "sidecar", Image: "registry.k8s.io/pause:3.9", Resources: res},
+			},
 			Volumes: []corev1.Volume{
-				{Name: "cm", VolumeSource: corev1.VolumeSource{
+				{Name: "configmap", VolumeSource: corev1.VolumeSource{
 					ConfigMap: &corev1.ConfigMapVolumeSource{
 						LocalObjectReference: corev1.LocalObjectReference{Name: idleConfigMapName(i % idleConfigMaps)},
 					}}},
-				{Name: "sec", VolumeSource: corev1.VolumeSource{
+				{Name: "secret", VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{SecretName: "wf-secret"}}},
 			},
-			RestartPolicy:                 corev1.RestartPolicyAlways,
-			TerminationGracePeriodSeconds: ptrInt64(30),
-			DNSPolicy:                     corev1.DNSClusterFirst,
-			ServiceAccountName:            "default",
-			SchedulerName:                 corev1.DefaultSchedulerName,
 		},
 	}
 }
-
-func ptrInt64(v int64) *int64 { return &v }
 
 // runList issues cluster-scoped rv=0 pod LISTs, the shape that drives the
 // apiserver's allocation rate in the real load test.

@@ -59,7 +59,7 @@ func runDrain(ctx context.Context, args []string) error {
 		kubeconfig  = fs.String("kubeconfig", "", "path to kubeconfig")
 		server      = fs.String("server", "", "apiserver URL for anonymous auth (skips TLS verify)")
 		clients     = fs.Int("clients", 100, "number of simulated nodes")
-		mode        = fs.String("mode", modeDecode, "raw | decode | informer")
+		mode        = fs.String("mode", modeDecode, "raw | decode | informer | watchlist")
 		watchSvc    = fs.Bool("watch-services", true, "also watch services (2 svc watchers per node in production)")
 		resync      = fs.Duration("resync", 0, "informer resync period; kube-proxy uses 30s (ConfigSyncPeriod)")
 		drainDelay  = fs.Duration("drain-delay", 0, "artificial per-event delay, to sweep client drain rate")
@@ -68,13 +68,17 @@ func runDrain(ctx context.Context, args []string) error {
 		// Goroutine population is the axis this rig was missing; see idlewatch.go.
 		idleWatches   = fs.Int("idle-watches", 0, idleWatchesHelp)
 		idleBookmarks = fs.Bool("idle-bookmarks", true, "request bookmarks on idle watches, as a real reflector does")
-		qps           = fs.Float64("qps", 100, "per-client QPS for the initial list")
+		// watchlist mode only. Pods are the object the deep-copy cost is worst
+		// for (~20KB, >100 allocations each), so targeting them measures the
+		// watch-cache copy path far more representatively than EndpointSlices.
+		wlResource = fs.String("watchlist-resource", "endpointslices", "resource for --mode=watchlist: endpointslices | pods")
+		qps        = fs.Float64("qps", 100, "per-client QPS for the initial list")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	switch *mode {
-	case modeRaw, modeDecode, modeInformer:
+	case modeRaw, modeDecode, modeInformer, modeWatchList:
 	default:
 		return fmt.Errorf("unknown mode %q", *mode)
 	}
@@ -100,7 +104,7 @@ func runDrain(ctx context.Context, args []string) error {
 		wg.Add(1)
 		go func(id int, cfg *rest.Config) {
 			defer wg.Done()
-			runClient(ctx, id, cfg, *mode, *watchSvc, *resync, *drainDelay, *idleWatches, *idleBookmarks)
+			runClient(ctx, id, cfg, *mode, *watchSvc, *resync, *drainDelay, *idleWatches, *idleBookmarks, *wlResource)
 		}(i, cfg)
 	}
 	klog.Infof("all %d clients started", *clients)
@@ -112,7 +116,7 @@ func runDrain(ctx context.Context, args []string) error {
 // runClient simulates one node. It reconnects forever, the way a reflector
 // does, so a watch closed by the apiserver (including a terminated watcher)
 // shows up as a re-list rather than a lost client.
-func runClient(ctx context.Context, id int, cfg *rest.Config, mode string, watchSvc bool, resync, drainDelay time.Duration, idleWatches int, idleBookmarks bool) {
+func runClient(ctx context.Context, id int, cfg *rest.Config, mode string, watchSvc bool, resync, drainDelay time.Duration, idleWatches int, idleBookmarks bool, wlResource string) {
 	client, err := newClient(cfg)
 	if err != nil {
 		klog.Errorf("client %d: %v", id, err)
@@ -127,6 +131,27 @@ func runClient(ctx context.Context, id int, cfg *rest.Config, mode string, watch
 
 	if mode == modeInformer {
 		runInformerClient(ctx, client, watchSvc, resync)
+		return
+	}
+
+	// WatchList clients re-establish in a loop rather than holding one stream,
+	// because the cost being measured is the initial snapshot, not steady state.
+	if mode == modeWatchList {
+		sel := epsSelector
+		if wlResource != "endpointslices" {
+			// kube-proxy's headless-service selector is meaningless off
+			// EndpointSlices, and an unmatched selector would silently replay
+			// nothing.
+			sel = ""
+		}
+		var wl sync.WaitGroup
+		wl.Add(1)
+		go func() { defer wl.Done(); runWatchListClient(ctx, client, wlResource, sel, drainDelay) }()
+		if watchSvc && wlResource == "endpointslices" {
+			wl.Add(1)
+			go func() { defer wl.Done(); runWatchListClient(ctx, client, "services", svcSelector, drainDelay) }()
+		}
+		wl.Wait()
 		return
 	}
 

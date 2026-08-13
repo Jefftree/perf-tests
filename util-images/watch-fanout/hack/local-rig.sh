@@ -23,6 +23,9 @@ K8S_ROOT="${K8S_ROOT:-$HOME/workspace/kubernetes}"
 RUN_DIR="${RUN_DIR:-/tmp/watch-fanout}"
 SECURE_PORT="${SECURE_PORT:-6443}"
 ETCD_PORT="${ETCD_PORT:-2379}"
+# Peer port must follow ETCD_PORT, otherwise a second rig on a different
+# ETCD_PORT still collides here and etcd silently fails to bind.
+ETCD_PEER_PORT="${ETCD_PEER_PORT:-$((ETCD_PORT + 1))}"
 # Match the production control plane so GOMAXPROCS-sensitive dispatch behavior
 # transfers; override downward for a laptop.
 APISERVER_GOMAXPROCS="${APISERVER_GOMAXPROCS:-0}"
@@ -57,9 +60,9 @@ echo "starting etcd on 127.0.0.1:$ETCD_PORT"
   --data-dir "$RUN_DIR/etcd" \
   --listen-client-urls "http://127.0.0.1:$ETCD_PORT" \
   --advertise-client-urls "http://127.0.0.1:$ETCD_PORT" \
-  --listen-peer-urls "http://127.0.0.1:2380" \
-  --initial-advertise-peer-urls "http://127.0.0.1:2380" \
-  --initial-cluster "default=http://127.0.0.1:2380" \
+  --listen-peer-urls "http://127.0.0.1:$ETCD_PEER_PORT" \
+  --initial-advertise-peer-urls "http://127.0.0.1:$ETCD_PEER_PORT" \
+  --initial-cluster "default=http://127.0.0.1:$ETCD_PEER_PORT" \
   --quota-backend-bytes 8589934592 \
   --log-level warn \
   >"$RUN_DIR/logs/etcd.log" 2>&1 &

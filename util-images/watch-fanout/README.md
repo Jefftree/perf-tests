@@ -145,6 +145,18 @@ storm-time CPU on.
 | `raw` | reads the watch stream, discards bytes, never decodes |
 | `decode` | decodes each event into a typed object and drops it |
 | `informer` | real SharedInformer with a store and a no-op handler -- the hollow-proxy equivalent |
+| `watchlist` | issues real WatchList requests (`sendInitialEvents`), times the replay to the initial-events bookmark, then re-establishes |
+
+`watchlist` exists because `raw` and `decode` hand-roll a plain watch with a
+resourceVersion and so never send `sendInitialEvents` -- they cannot reach the
+WatchList path at all, even though both feature gates are on by default
+(server-side since 1.34, client-go since 1.35). Only `informer` would, and at
+119MB per client it cannot be run at scale.
+
+It re-establishes in a loop on purpose: the interesting cost is the initial
+snapshot and the lock contention around it, not steady state. Point it at fat
+objects with `--watchlist-resource=pods`, which replays the whole pod
+population per establishment.
 
 200 clients, 35.6 events/s each:
 
