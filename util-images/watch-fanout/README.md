@@ -20,7 +20,64 @@ the nodes: no kubelets, no scheduler, no VMs.
 | `list` | issues cluster-scoped `rv=0` pod LISTs, streaming and discarding the body |
 | `kubelet` | runs N simulated kubelets, each with its own identity: registers a Node, renews its Lease, posts Node status, and patches the status of the pods bound to it |
 
-## Quick start
+## Quick start (kind)
+
+The supported entry point. `go test` is the whole interface: it creates a kind
+cluster, builds and side-loads the image, populates the objects, runs the load
+as pods and reports.
+
+```bash
+go test ./kind/ -run TestWatchFanout -v -timeout 40m
+
+# smaller, and keep the cluster so the next run skips bring-up and population
+WF_RUN=1 WF_KEEP=1 WF_WATCHERS=300 WF_PROBES=50 WF_KUBELETS=100 WF_PODS=2000 \
+  go test ./kind/ -run TestWatchFanout -v -timeout 20m -wf-warmup=40s -wf-window=90s
+```
+
+Knobs: `WF_WATCHERS`, `WF_PROBES`, `WF_KUBELETS`, `WF_PODS`, `WF_KEEP`, and the
+`-wf-warmup` / `-wf-window` flags. The cluster is named `watch-fanout` and no
+other kind cluster is touched.
+
+A healthy small run looks like this, and the rates are worth checking against
+arithmetic before trusting a run: leases are `nodes/renew`, node status is
+`nodes/node-status-period`.
+
+```
+  watchers                 350
+  events ingested/s        33.0
+  deliveries/s             11562
+  terminated watchers/s    0.00
+  delivery completeness    1.000
+  lease writes/s           10.0  (throttled 0.00/s)
+  node status writes/s     0.33
+  delivery p50 / mean / p99  7 / 7 / 19 ms   (>1s 0.00%)
+```
+
+### What kind changes, and why some of it had to be handled
+
+The bash rig ran a bare apiserver with no controllers. A real cluster has them,
+and two of the differences are load-bearing:
+
+- **The endpointslice controller takes ownership.** Preloaded Services are
+  created **without a selector** on purpose. With a selector, the controller
+  reconciles all 8,100 of them, creates its own slices, throttles itself at
+  ~1 request/s, and then competes with the writer for the very objects whose
+  churn rate the rig is holding fixed.
+- **The measurement path must not run through the workload.** Load pods use
+  `hostNetwork` and are scraped over kind's `extraPortMappings`. A NodePort
+  Service would route metrics through kube-proxy and the endpointslice
+  controller, and `kubectl port-forward` would route them through the apiserver:
+  all three are under test. For the same reason the rig's own client talks to
+  the node IP rather than the `kubernetes` ClusterIP, which is kube-proxy
+  iptables that 8,100 Services are already thrashing.
+
+## Workstation rig (no docker, no kind)
+
+`hack/local-rig.sh` runs etcd and kube-apiserver as plain processes. It predates
+the kind harness and is kept for driving a big-box run against arbitrary
+apiserver builds. It is developer tooling, not the benchmark entry point: it
+hand-rolls cluster bring-up and every A/B through it needs its own orchestration
+script.
 
 ```bash
 # one-time: build kube-apiserver (etcd comes from third_party/etcd)

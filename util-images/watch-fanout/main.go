@@ -94,13 +94,23 @@ func baseConfig(kubeconfig, server string, qps float32) (*rest.Config, error) {
 		cfg *rest.Config
 		err error
 	)
-	if server != "" {
+	switch {
+	case server != "":
 		cfg = &rest.Config{Host: server}
 		cfg.TLSClientConfig.Insecure = true
-	} else {
+	case kubeconfig != "":
 		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
 			return nil, err
+		}
+	default:
+		// In-cluster, which is how every role runs under kind. The
+		// ServiceAccount credential is only used for the CA and the server
+		// URL by the kubelet role, which then replaces the bearer token per
+		// client with its own system:node identity.
+		cfg, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("no --kubeconfig or --server given and not running in-cluster: %w", err)
 		}
 	}
 	cfg.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"

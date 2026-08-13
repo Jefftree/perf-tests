@@ -1,0 +1,60 @@
+# Copyright The Kubernetes Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Single control-plane node: the apiserver and etcd are the subject, and the
+# load generators run as pods on the same node. Adding workers would only move
+# the load pods, not change what is measured, and would cost more containers.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: watch-fanout
+nodes:
+- role: control-plane
+  # tokens.csv carries one system:node:<name> identity per simulated kubelet.
+  # Without it every request authenticates as a ServiceAccount or as
+  # system:masters, and system:masters is EXEMPT from flow control, so no
+  # priority level is ever exercised and APF behaviour cannot be observed.
+  # The file must exist before the cluster is created, so the driver writes it
+  # first (watch-fanout kubelet --write-tokens).
+  extraMounts:
+  - hostPath: HOSTAUTHDIR
+    containerPath: /etc/kubernetes/wf
+    readOnly: true
+  # The load roles run with hostNetwork, so their /metrics ports are on the
+  # node directly and these mappings reach them from the host. Deliberately not
+  # a NodePort Service: that would route the measurement through kube-proxy and
+  # the endpointslice controller, both of which are part of the workload under
+  # test, and kubectl port-forward would proxy it through the apiserver, which
+  # is the process being measured.
+  extraPortMappings:
+  - { containerPort: 9112, hostPort: 9112, listenAddress: "127.0.0.1" }  # drain raw
+  - { containerPort: 9113, hostPort: 9113, listenAddress: "127.0.0.1" }  # drain decode
+  - { containerPort: 9115, hostPort: 9115, listenAddress: "127.0.0.1" }  # kubelet
+  - { containerPort: 9116, hostPort: 9116, listenAddress: "127.0.0.1" }  # drain watchlist
+  - { containerPort: 9117, hostPort: 9117, listenAddress: "127.0.0.1" }  # drain slow
+  - { containerPort: 9119, hostPort: 9119, listenAddress: "127.0.0.1" }  # write
+  kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        token-auth-file: /etc/kubernetes/wf/tokens.csv
+        # The rig's own metrics endpoint is scraped anonymously from inside the
+        # cluster; without this the scrape needs a credential of its own.
+        anonymous-auth: "true"
+      extraVolumes:
+      - name: wf-auth
+        hostPath: /etc/kubernetes/wf
+        mountPath: /etc/kubernetes/wf
+        readOnly: true
+        pathType: Directory

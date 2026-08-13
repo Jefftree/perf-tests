@@ -186,9 +186,9 @@ func runOneKubelet(ctx context.Context, id int, cfg *rest.Config, o kubeletOpts)
 	// that, a shared timer left nil after its first fire.
 	lease := time.NewTicker(o.renew)
 	defer lease.Stop()
-	nodeStatusC, stopNodeStatus := optionalTick(o.nodeStatusPeriod)
+	nodeStatusC, stopNodeStatus := staggeredTick(ctx, o.nodeStatusPeriod, id, o.nodes)
 	defer stopNodeStatus()
-	podStatusC, stopPodStatus := optionalTick(o.podStatusPeriod)
+	podStatusC, stopPodStatus := staggeredTick(ctx, o.podStatusPeriod, id, o.nodes)
 	defer stopPodStatus()
 
 	// Which pod of this kubelet's set to touch next. Rotating means the
@@ -238,15 +238,56 @@ func runOneKubelet(ctx context.Context, id int, cfg *rest.Config, o kubeletOpts)
 	}
 }
 
-// optionalTick returns a channel that never fires when period is 0, so a
-// disabled source needs no branch in the select. A nil channel blocks forever,
-// which is exactly the wanted behaviour in a select arm.
-func optionalTick(period time.Duration) (<-chan time.Time, func()) {
+// staggeredTick returns a channel that first fires at id/total of the way
+// through the period and then every period. A period of 0 returns a nil
+// channel, which blocks forever, so a disabled source needs no branch in the
+// select.
+//
+// The stagger is not cosmetic. Every simulated kubelet in a process starts
+// within milliseconds of the others, so an unstaggered ticker makes all of them
+// post node status in the same instant every 5 minutes: a thundering herd that
+// no real cluster produces, and one that is invisible between herds. A 60s
+// measurement window against an unstaggered 5m period reported exactly 0 node
+// status writes. Spreading the phase deterministically by index gives the
+// period-uniform arrival a real fleet has, and keeps runs reproducible in a way
+// a random offset would not.
+func staggeredTick(ctx context.Context, period time.Duration, id, total int) (<-chan time.Time, func()) {
 	if period <= 0 {
 		return nil, func() {}
 	}
-	t := time.NewTicker(period)
-	return t.C, t.Stop
+	ch := make(chan time.Time, 1)
+	stop := make(chan struct{})
+	go func() {
+		var offset time.Duration
+		if total > 0 {
+			offset = time.Duration(int64(period) * int64(id%total) / int64(total))
+		}
+		select {
+		case <-time.After(offset):
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		}
+		t := time.NewTicker(period)
+		defer t.Stop()
+		for {
+			// Drop rather than queue if the consumer is busy: a late tick is
+			// worth less than an accurate rate.
+			select {
+			case ch <- time.Now():
+			default:
+			}
+			select {
+			case <-t.C:
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, func() { close(stop) }
 }
 
 func ensureLease(ctx context.Context, c kubernetes.Interface, name string) error {

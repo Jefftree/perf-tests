@@ -191,8 +191,17 @@ func createService(ctx context.Context, c kubernetes.Interface, ns, kind string,
 		Spec: corev1.ServiceSpec{
 			// ClusterIP is assigned by the apiserver; a non-headless service is
 			// what both the kubelet and kube-proxy service selectors admit.
-			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)}},
-			Selector: map[string]string{"name": name},
+			//
+			// Deliberately selectorless. The endpointslice controller only
+			// reconciles Services that HAVE a selector, and on a cluster with a
+			// kube-controller-manager (kind, unlike the bash rig) a selector
+			// here means the controller takes ownership of these slices: it
+			// created its own empty slice for all 8,100 preloaded Services,
+			// throttling itself at ~1 request/s, and then competes with the
+			// writer for the very objects whose churn rate this rig is trying
+			// to hold fixed. Fan-out has to be controlled by the rig, not by a
+			// controller reacting to it, so the slices are managed by hand.
+			Ports: []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)}},
 		},
 	}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
