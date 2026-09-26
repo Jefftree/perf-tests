@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLUSTER_NAME="${CLUSTER_NAME:-vibe-5k}"
+CLUSTER_NAME="${CLUSTER_NAME:-nodeloader-5k}"
 NUM_NODES="${NUM_NODES:-5000}"
-NODE_PREFIX="${NODE_PREFIX:-vibe-node-}"
+NODE_PREFIX="${NODE_PREFIX:-nodeloader-}"
 KIND_IMAGE="${KIND_IMAGE:-kindest/node:v1.36.1}"
-SHM_DIR="${SHM_DIR:-/dev/shm/vibe-5k}"
-ETCD_DATA_DIR="${ETCD_DATA_DIR:-/var/lib/vibe-5k}"
-SPLIT_ETCD_LEASES="${SPLIT_ETCD_LEASES:-false}"
+SHM_DIR="${SHM_DIR:-/dev/shm/nodeloader-5k}"
+ETCD_DATA_DIR="${ETCD_DATA_DIR:-/var/lib/nodeloader-5k}"
 CUSTOM_APISERVER_BIN="${CUSTOM_APISERVER_BIN:-}"
 CP_CPUS="${CP_CPUS:-0-95}"
 CP_GOMAXPROCS="${CP_GOMAXPROCS:-96}"
@@ -33,7 +32,6 @@ with open(sys.argv[3], "w") as f:
         f.write(f"token-{name},system:node:{name},uid-{name},\"system:nodes\"\n")
 ' "${NUM_NODES}" "${NODE_PREFIX}" "${SHM_DIR}/tokens/known_tokens.csv"
 chmod -R a+rX "${SHM_DIR}/tokens"
-
 
 echo "=== [3/5] Creating 1-node kind control-plane (${CLUSTER_NAME}) with 5k scale flags ==="
 if kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"; then
@@ -134,19 +132,24 @@ kubectl --context "${CTX}" -n kube-system patch daemonset kube-proxy \
 kubectl --context "${CTX}" taint nodes "${CLUSTER_NAME}-control-plane" \
   node-role.kubernetes.io/control-plane:NoSchedule --overwrite
 
-# Allow system:nodes to watch EndpointSlices, ServiceCIDRs, Services, ConfigMaps (kube-root-ca.crt), CSINodes, CSIDrivers, RuntimeClasses
-kubectl --context "${CTX}" create clusterrolebinding vibe-node-proxier \
+# Bind system:nodes to system:node and system:node-proxier + extra read-only watch resources
+kubectl --context "${CTX}" create clusterrolebinding nodeloader-node \
+  --clusterrole=system:node --group=system:nodes --dry-run=client -o yaml | kubectl --context "${CTX}" apply -f -
+kubectl --context "${CTX}" create clusterrolebinding nodeloader-node-proxier \
   --clusterrole=system:node-proxier --group=system:nodes --dry-run=client -o yaml | kubectl --context "${CTX}" apply -f -
 
 kubectl --context "${CTX}" apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: vibe-node-extra-watches
+  name: nodeloader-extra-watches
 rules:
 - apiGroups: [""]
-  resources: ["configmaps", "services", "nodes", "events"]
-  verbs: ["get", "list", "watch", "create", "patch"]
+  resources: ["configmaps", "services", "nodes", "nodes/status", "events"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
 - apiGroups: ["storage.k8s.io"]
   resources: ["csidrivers", "csinodes"]
   verbs: ["get", "list", "watch"]
@@ -163,11 +166,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: vibe-node-extra-watches
+  name: nodeloader-extra-watches
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: vibe-node-extra-watches
+  name: nodeloader-extra-watches
 subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: Group

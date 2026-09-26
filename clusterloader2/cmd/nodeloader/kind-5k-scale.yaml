@@ -8,13 +8,13 @@ networking:
 nodes:
 - role: control-plane
   extraMounts:
-  - hostPath: /var/lib/vibe-5k/etcd-main
+  - hostPath: /var/lib/nodeloader-5k/etcd-main
     containerPath: /var/lib/etcd
-  - hostPath: /var/lib/vibe-5k/etcd-events
+  - hostPath: /var/lib/nodeloader-5k/etcd-events
     containerPath: /var/lib/etcd-events
-  - hostPath: /var/lib/vibe-5k/etcd-leases
+  - hostPath: /var/lib/nodeloader-5k/etcd-leases
     containerPath: /var/lib/etcd-leases
-  - hostPath: /dev/shm/vibe-5k/tokens
+  - hostPath: /dev/shm/nodeloader-5k/tokens
     containerPath: /etc/kubernetes/pki/tokens
   kubeadmConfigPatches:
   - |
