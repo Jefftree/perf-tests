@@ -1,4 +1,4 @@
-# ClusterLoader2 overrides for single-VM 5,000-node simulator (vibe-kubemark).
+# ClusterLoader2 overrides for single-VM 5,000-node simulator (nodeloader).
 # Disables physical data-plane / cloud-provider probes while preserving the full
 # 5,000-node control-plane load profile (60,000 concurrent pods / ~95,000 total pods across
 # big/medium/small Deployments, StatefulSets, Jobs, DaemonSet, ConfigMaps, Secrets, Services, EndpointSlices).

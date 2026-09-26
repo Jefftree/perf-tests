@@ -26,6 +26,7 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 
 	"k8s.io/klog/v2"
+	"k8s.io/perf-tests/clusterloader2/pkg/util"
 )
 
 const (
@@ -89,7 +90,7 @@ func NewMetricsGrabber(c clientset.Interface, ec clientset.Interface, kubelets b
 		klog.Warning("Can't find any Nodes in the API server to grab metrics from")
 	}
 	for _, node := range nodeList.Items {
-		if deprecatedMightBeMasterNode(node.Name) {
+		if deprecatedMightBeMasterNode(node.Name) || util.IsControlPlaneNode(&node) {
 			registeredMaster = true
 			masterName = node.Name
 			break
