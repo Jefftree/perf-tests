@@ -1,7 +1,16 @@
 {{$image := DefaultParam .CL2_BENCHMARK_IMAGE "gcr.io/k8s-staging-perf-tests/perf-tests-util/request-benchmark:v0.0.18"}}
 {{$imagePullPolicy := DefaultParam .CL2_IMAGE_PULL_POLICY "IfNotPresent"}}
-{{$cpu := DefaultParam .cpu "200m"}}
-{{$memory := DefaultParam .memory "100Mi"}}
+{{$watchesPerReplica := DefaultParam .WatchesPerReplica 1}}
+{{$fieldSelector := DefaultParam .FieldSelector ""}}
+{{$podCount := DefaultParam .PodCount 0}}
+{{$defaultCpu := "200m"}}
+{{$defaultMemory := "100Mi"}}
+{{if ne (printf "%v" $watchesPerReplica) "1"}}
+{{$defaultCpu = "4000m"}}
+{{$defaultMemory = "4Gi"}}
+{{end}}
+{{$cpu := DefaultParam .CL2_PODS_WATCH_CPU (DefaultParam .cpu $defaultCpu)}}
+{{$memory := DefaultParam .CL2_PODS_WATCH_MEMORY (DefaultParam .memory $defaultMemory)}}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -30,6 +39,22 @@ spec:
         - --api-version=v1
         - --resource=pods
         - --content-type=proto
+        - --watches={{$watchesPerReplica}}
+{{if ne $fieldSelector ""}}
+        - --field-selector={{$fieldSelector}}
+{{end}}
+{{if ne (printf "%v" $podCount) "0"}}
+        - --pod-count={{$podCount}}
+{{end}}
+        readinessProbe:
+          exec:
+            command:
+            - test
+            - -f
+            - /tmp/watches-ready
+          initialDelaySeconds: 1
+          periodSeconds: 2
+          failureThreshold: 150
         resources:
           requests:
             cpu: {{$cpu}}

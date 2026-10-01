@@ -3,6 +3,9 @@
 {{$action := DefaultParam .action "create"}}
 {{$namePrefix := DefaultParam .namePrefix "watch-workload-"}}
 {{$replicas := DefaultParam .replicas 1}}
+{{$watchesPerReplica := DefaultParam .watchesPerReplica 1}}
+{{$fieldSelector := DefaultParam .fieldSelector ""}}
+{{$podCount := DefaultParam .podCount 0}}
 {{$targetNamespace := DefaultParam .targetNamespace ""}}
 
 steps:
@@ -47,6 +50,9 @@ steps:
       objectTemplatePath: modules/watch/deployment.yaml
       templateFillMap:
         Replicas: {{$replicas}}
+        WatchesPerReplica: {{$watchesPerReplica}}
+        FieldSelector: {{$fieldSelector}}
+        PodCount: {{$podCount}}
 
 
 - name: Waiting for '{{$action}}' watch generators to be completed
