@@ -400,26 +400,55 @@ func parseHistogramMetric(metricName string) func(data []byte, buildNumber int, 
 			klog.Errorf("unknown metric name: %s", metricName)
 		}
 
-		for i := range histogramVecMetric {
-			perfData := perftype.DataItem{Unit: "%", Labels: histogramVecMetric[i].Labels, Data: make(map[string]float64)}
-			delete(perfData.Labels, "__name__")
-			count, exists := histogramVecMetric[i].Buckets["+Inf"]
-			if !exists {
-				klog.Errorf("err in build %d: no +Inf bucket: %s", buildNumber, string(data))
-				continue
-			}
-			for bucket, buckerVal := range histogramVecMetric[i].Buckets {
-				if bucket != "+Inf" {
-					if count == 0 {
-						perfData.Data["<= "+bucket+"s"] = 0
-						continue
-					}
-					perfData.Data["<= "+bucket+"s"] = float64(buckerVal) / float64(count) * 100
+		for _, hist := range mergeHistograms(histogramVecMetric, buildNumber, data) {
+			count := hist.Buckets["+Inf"]
+			perfData := perftype.DataItem{Unit: "%", Labels: hist.Labels, Data: make(map[string]float64, len(hist.Buckets))}
+			for bucket, bucketVal := range hist.Buckets {
+				if bucket == "+Inf" {
+					continue
 				}
+				if count == 0 {
+					perfData.Data["<= "+bucket+"s"] = 0
+					continue
+				}
+				perfData.Data["<= "+bucket+"s"] = float64(bucketVal) / float64(count) * 100
 			}
 			testResult.Builds.AddBuildData(build, perfData)
 		}
 	}
+}
+
+func mergeHistograms(histograms histogramVec, buildNumber int, rawData []byte) histogramVec {
+	merged := make(histogramVec, 0, len(histograms))
+	indexByKey := make(map[string]int, len(histograms))
+	for _, entry := range histograms {
+		if _, exists := entry.Buckets["+Inf"]; !exists {
+			klog.Errorf("err in build %d: no +Inf bucket: %s", buildNumber, string(rawData))
+			continue
+		}
+		// Drop per-cluster Raft member IDs ("To") so multi-master builds merge into one continuous series.
+		labels := make(map[string]string, len(entry.Labels))
+		for labelKey, labelVal := range entry.Labels {
+			if labelKey == "__name__" || labelKey == "To" {
+				continue
+			}
+			labels[labelKey] = labelVal
+		}
+		key := createMapID(labels)
+		idx, exists := indexByKey[key]
+		if !exists {
+			idx = len(merged)
+			indexByKey[key] = idx
+			merged = append(merged, histogram{
+				Labels:  labels,
+				Buckets: make(map[string]int, len(entry.Buckets)),
+			})
+		}
+		for bucket, bucketVal := range entry.Buckets {
+			merged[idx].Buckets[bucket] += bucketVal
+		}
+	}
+	return merged
 }
 
 func parseSystemPodMetrics(data []byte, buildNumber int, testResult *BuildData) {

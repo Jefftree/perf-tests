@@ -17,9 +17,13 @@ limitations under the License.
 package common
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"math"
 	"os"
+	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -43,18 +47,21 @@ func init() {
 
 func createEtcdMetricsMeasurement() measurement.Measurement {
 	return &etcdMetricsMeasurement{
-		stopCh:  make(chan struct{}),
-		wg:      &sync.WaitGroup{},
-		metrics: newEtcdMetrics(),
+		wg:               &sync.WaitGroup{},
+		stopCh:           make(chan struct{}),
+		metrics:          newEtcdMetrics(),
+		initialSnapshots: make(map[string]etcdHostSnapshot),
 	}
 }
 
 type etcdMetricsMeasurement struct {
-	sync.Mutex
+	wg        *sync.WaitGroup
 	isRunning bool
 	stopCh    chan struct{}
-	wg        *sync.WaitGroup
-	metrics   *etcdMetrics
+
+	sync.Mutex
+	metrics          *etcdMetrics
+	initialSnapshots map[string]etcdHostSnapshot
 }
 
 // Execute supports two actions:
@@ -87,17 +94,32 @@ func (e *etcdMetricsMeasurement) Execute(config *measurement.Config) ([]measurem
 		if err != nil {
 			return nil, err
 		}
+		e.resetState()
+		snapshots := make(map[string]etcdHostSnapshot, len(hosts))
+		for _, h := range hosts {
+			snapshot, err := e.captureInitialMetrics(h, provider, etcdInsecurePort)
+			if err != nil {
+				return nil, err
+			}
+			snapshots[h] = snapshot
+		}
+		e.setInitialSnapshots(snapshots)
 		for _, h := range hosts {
 			e.startCollecting(h, provider, waitTime, etcdInsecurePort)
 		}
 		return nil, nil
 	case "gather":
+		e.Dispose()
+		summaryMetrics := newEtcdMetrics()
+		summaryMetrics.MaxDatabaseSize = e.getMaxDatabaseSize()
 		for _, h := range hosts {
-			if err = e.stopAndSummarize(h, provider, etcdInsecurePort); err != nil {
+			hostMetrics, err := e.collectHostMetrics(h, provider, etcdInsecurePort)
+			if err != nil {
 				return nil, err
 			}
+			mergeEtcdMetrics(summaryMetrics, hostMetrics)
 		}
-		content, err := util.PrettyPrintJSON(e.metrics)
+		content, err := util.PrettyPrintJSON(summaryMetrics)
 		if err != nil {
 			return nil, err
 		}
@@ -119,6 +141,42 @@ func (e *etcdMetricsMeasurement) Dispose() {
 
 func (e *etcdMetricsMeasurement) String() string {
 	return etcdMetricsMetricName
+}
+
+func (e *etcdMetricsMeasurement) resetState() {
+	e.Dispose()
+	e.stopCh = make(chan struct{})
+	e.Lock()
+	defer e.Unlock()
+	e.metrics = newEtcdMetrics()
+	e.initialSnapshots = make(map[string]etcdHostSnapshot)
+}
+
+func (e *etcdMetricsMeasurement) captureInitialMetrics(host string, provider provider.Provider, port int) (etcdHostSnapshot, error) {
+	samples, err := e.getEtcdMetrics(host, provider, port)
+	if err != nil {
+		return etcdHostSnapshot{}, err
+	}
+	return extractEtcdHostSnapshot(samples), nil
+}
+
+func (e *etcdMetricsMeasurement) setInitialSnapshots(snapshots map[string]etcdHostSnapshot) {
+	e.Lock()
+	defer e.Unlock()
+	e.initialSnapshots = snapshots
+}
+
+func (e *etcdMetricsMeasurement) getInitialSnapshot(host string) (etcdHostSnapshot, bool) {
+	e.Lock()
+	defer e.Unlock()
+	snapshot, ok := e.initialSnapshots[host]
+	return snapshot, ok
+}
+
+func (e *etcdMetricsMeasurement) getMaxDatabaseSize() float64 {
+	e.Lock()
+	defer e.Unlock()
+	return e.metrics.MaxDatabaseSize
 }
 
 func (e *etcdMetricsMeasurement) startCollecting(host string, provider provider.Provider, interval time.Duration, port int) {
@@ -154,37 +212,17 @@ func (e *etcdMetricsMeasurement) startCollecting(host string, provider provider.
 	}()
 }
 
-func (e *etcdMetricsMeasurement) stopAndSummarize(host string, provider provider.Provider, port int) error {
-	defer e.Dispose()
-	// Do some one-off collection of metrics.
+func (e *etcdMetricsMeasurement) collectHostMetrics(host string, provider provider.Provider, port int) (*etcdMetrics, error) {
 	samples, err := e.getEtcdMetrics(host, provider, port)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	collectEtcdMetrics := func(sample *model.Sample) {
-		var hist *measurementutil.HistogramVec
-		switch sample.Metric[model.MetricNameLabel] {
-		case "etcd_disk_backend_commit_duration_seconds_bucket":
-			hist = &e.metrics.BackendCommitDuration
-		case "etcd_debugging_snap_save_total_duration_seconds_bucket":
-			hist = &e.metrics.SnapshotSaveTotalDuration
-		case "etcd_disk_wal_fsync_duration_seconds_bucket":
-			hist = &e.metrics.WalFsyncDuration
-		case "etcd_network_peer_round_trip_time_seconds_bucket":
-			hist = &e.metrics.PeerRoundTripTime
-		default:
-			return
-		}
-
-		e.Lock()
-		measurementutil.ConvertSampleToBucket(sample, hist)
-		e.Unlock()
+	current := extractEtcdHostSnapshot(samples)
+	if initial, ok := e.getInitialSnapshot(host); ok {
+		return subtractEtcdHostSnapshot(current, initial), nil
 	}
-	for _, sample := range samples {
-		collectEtcdMetrics(sample)
-	}
-	return nil
+	return current.metrics, nil
 }
 
 func (e *etcdMetricsMeasurement) getEtcdMetrics(host string, provider provider.Provider, port int) ([]*model.Sample, error) {
@@ -256,5 +294,169 @@ func newEtcdMetrics() *etcdMetrics {
 		SnapshotSaveTotalDuration: make(measurementutil.HistogramVec, 0),
 		PeerRoundTripTime:         make(measurementutil.HistogramVec, 0),
 		WalFsyncDuration:          make(measurementutil.HistogramVec, 0),
+	}
+}
+
+type etcdHostSnapshot struct {
+	metrics             *etcdMetrics
+	processStartTime    float64
+	hasProcessStartTime bool
+}
+
+func extractEtcdHostSnapshot(samples []*model.Sample) etcdHostSnapshot {
+	snapshot := etcdHostSnapshot{
+		metrics: newEtcdMetrics(),
+	}
+	for _, sample := range samples {
+		switch sample.Metric[model.MetricNameLabel] {
+		case "etcd_disk_backend_commit_duration_seconds_bucket":
+			measurementutil.ConvertSampleToBucket(sample, &snapshot.metrics.BackendCommitDuration)
+		case "etcd_debugging_snap_save_total_duration_seconds_bucket":
+			measurementutil.ConvertSampleToBucket(sample, &snapshot.metrics.SnapshotSaveTotalDuration)
+		case "etcd_disk_wal_fsync_duration_seconds_bucket":
+			measurementutil.ConvertSampleToBucket(sample, &snapshot.metrics.WalFsyncDuration)
+		case "etcd_network_peer_round_trip_time_seconds_bucket":
+			measurementutil.ConvertSampleToBucket(sample, &snapshot.metrics.PeerRoundTripTime)
+		case "process_start_time_seconds":
+			val := float64(sample.Value)
+			if !math.IsNaN(val) && !math.IsInf(val, 0) {
+				snapshot.processStartTime = val
+				snapshot.hasProcessStartTime = true
+			}
+		}
+	}
+	return snapshot
+}
+
+func subtractEtcdHostSnapshot(current, initial etcdHostSnapshot) *etcdMetrics {
+	if current.hasProcessStartTime && initial.hasProcessStartTime && current.processStartTime != initial.processStartTime {
+		return cloneEtcdMetrics(current.metrics)
+	}
+	return &etcdMetrics{
+		BackendCommitDuration:     subtractHistogramVec(current.metrics.BackendCommitDuration, initial.metrics.BackendCommitDuration),
+		SnapshotSaveTotalDuration: subtractHistogramVec(current.metrics.SnapshotSaveTotalDuration, initial.metrics.SnapshotSaveTotalDuration),
+		PeerRoundTripTime:         subtractHistogramVec(current.metrics.PeerRoundTripTime, initial.metrics.PeerRoundTripTime),
+		WalFsyncDuration:          subtractHistogramVec(current.metrics.WalFsyncDuration, initial.metrics.WalFsyncDuration),
+	}
+}
+
+func subtractHistogramVec(currentVec, initialVec measurementutil.HistogramVec) measurementutil.HistogramVec {
+	subtracted := make(measurementutil.HistogramVec, 0, len(currentVec))
+	for _, currentHist := range currentVec {
+		initialHist, found := findMatchingHistogram(initialVec, currentHist.Labels)
+		if !found || hasHistogramReset(currentHist, initialHist) {
+			subtracted = append(subtracted, cloneHistogram(currentHist))
+			continue
+		}
+		buckets := make(map[string]int, len(currentHist.Buckets))
+		for bucket, currentCount := range currentHist.Buckets {
+			buckets[bucket] = currentCount - initialHist.Buckets[bucket]
+		}
+		subtracted = append(subtracted, measurementutil.Histogram{
+			Labels:  maps.Clone(currentHist.Labels),
+			Buckets: buckets,
+		})
+	}
+	return subtracted
+}
+
+func findMatchingHistogram(histograms measurementutil.HistogramVec, labels map[string]string) (measurementutil.Histogram, bool) {
+	for _, hist := range histograms {
+		if maps.Equal(hist.Labels, labels) {
+			return hist, true
+		}
+	}
+	return measurementutil.Histogram{}, false
+}
+
+type bucketBound struct {
+	key        string
+	upperBound float64
+}
+
+func hasHistogramReset(current, initial measurementutil.Histogram) bool {
+	for bucket, initialCount := range initial.Buckets {
+		currentCount, exists := current.Buckets[bucket]
+		if !exists || currentCount < initialCount {
+			return true
+		}
+	}
+
+	bounds := make([]bucketBound, 0, len(current.Buckets))
+	for bucket := range current.Buckets {
+		upperBound, err := strconv.ParseFloat(bucket, 64)
+		if err != nil || math.IsNaN(upperBound) {
+			klog.ErrorS(err, "Failed to parse etcd histogram bucket bound", "bucket", bucket)
+			return true
+		}
+		bounds = append(bounds, bucketBound{
+			key:        bucket,
+			upperBound: upperBound,
+		})
+	}
+	slices.SortFunc(bounds, func(a, b bucketBound) int {
+		return cmp.Compare(a.upperBound, b.upperBound)
+	})
+
+	// Without a counter reset, non-cumulative interval counts cannot decrease, so
+	// cumulative bucket deltas (current[b_i] - initial[b_i]) must be non-decreasing.
+	prevDelta := 0
+	for _, bound := range bounds {
+		delta := current.Buckets[bound.key] - initial.Buckets[bound.key]
+		if delta < prevDelta {
+			return true
+		}
+		prevDelta = delta
+	}
+	return false
+}
+
+func mergeEtcdMetrics(dst, src *etcdMetrics) {
+	mergeHistogramVec(&dst.BackendCommitDuration, src.BackendCommitDuration)
+	mergeHistogramVec(&dst.SnapshotSaveTotalDuration, src.SnapshotSaveTotalDuration)
+	mergeHistogramVec(&dst.PeerRoundTripTime, src.PeerRoundTripTime)
+	mergeHistogramVec(&dst.WalFsyncDuration, src.WalFsyncDuration)
+}
+
+func mergeHistogramVec(dst *measurementutil.HistogramVec, src measurementutil.HistogramVec) {
+	for _, srcHist := range src {
+		matched := false
+		for i := range *dst {
+			if maps.Equal((*dst)[i].Labels, srcHist.Labels) {
+				for bucket, count := range srcHist.Buckets {
+					(*dst)[i].Buckets[bucket] += count
+				}
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			*dst = append(*dst, cloneHistogram(srcHist))
+		}
+	}
+}
+
+func cloneEtcdMetrics(src *etcdMetrics) *etcdMetrics {
+	return &etcdMetrics{
+		BackendCommitDuration:     cloneHistogramVec(src.BackendCommitDuration),
+		SnapshotSaveTotalDuration: cloneHistogramVec(src.SnapshotSaveTotalDuration),
+		PeerRoundTripTime:         cloneHistogramVec(src.PeerRoundTripTime),
+		WalFsyncDuration:          cloneHistogramVec(src.WalFsyncDuration),
+		MaxDatabaseSize:           src.MaxDatabaseSize,
+	}
+}
+
+func cloneHistogramVec(src measurementutil.HistogramVec) measurementutil.HistogramVec {
+	cloned := make(measurementutil.HistogramVec, 0, len(src))
+	for _, hist := range src {
+		cloned = append(cloned, cloneHistogram(hist))
+	}
+	return cloned
+}
+
+func cloneHistogram(src measurementutil.Histogram) measurementutil.Histogram {
+	return measurementutil.Histogram{
+		Labels:  maps.Clone(src.Labels),
+		Buckets: maps.Clone(src.Buckets),
 	}
 }
