@@ -48,6 +48,23 @@ func TestRemoveDisambiguationInfixes(t *testing.T) {
 		{"etcd-manager-main-i-0e39c6d2c2304ee3c/etcd-manager", "etcd-manager-main/etcd-manager"},
 		{"i-0e39c6d2c2304ee3/kubelet", "i-0e39c6d2c2304ee3/kubelet"},
 		{"ip-10-0-0-1/kubelet", "ip-10-0-0-1/kubelet"},
+		// kops HA suffixes control-plane-<zone> instance groups with -1, -2, -3; collapse them into control-plane-<zone>.
+		{"control-plane-us-east1-b-g9dp/kubelet", "control-plane-us-east1-b/kubelet"},
+		{"control-plane-us-east1-b-1-4x69/kubelet", "control-plane-us-east1-b/kubelet"},
+		{"control-plane-us-east1-b-1-4829/kubelet", "control-plane-us-east1-b/kubelet"},
+		{"control-plane-us-east1-b-2-3npn/pods", "control-plane-us-east1-b/pods"},
+		{"kube-apiserver-control-plane-us-east1-b-1-4x69/kube-apiserver", "kube-apiserver-control-plane-us-east1-b/kube-apiserver"},
+		{"kube-controller-manager-control-plane-us-east1-b-g9dp/kube-controller-manager", "kube-controller-manager-control-plane-us-east1-b/kube-controller-manager"},
+		{"kube-controller-manager-control-plane-us-east1-b-3-fq75/kube-controller-manager", "kube-controller-manager-control-plane-us-east1-b/kube-controller-manager"},
+		{"kube-controller-manager-control-plane-us-east1-b-3/kube-controller-manager", "kube-controller-manager-control-plane-us-east1-b/kube-controller-manager"},
+		{"kube-scheduler-control-plane-us-east1-b-2-3npn/kube-scheduler", "kube-scheduler-control-plane-us-east1-b/kube-scheduler"},
+		{"etcd-manager-main-control-plane-us-east1-b-1-4x69/etcd-manager", "etcd-manager-main-control-plane-us-east1-b/etcd-manager"},
+		{"etcd-manager-events-control-plane-us-east1-b-2-3npn/etcd-manager", "etcd-manager-events-control-plane-us-east1-b/etcd-manager"},
+		{"control-plane-eastus-1/kubelet", "control-plane-eastus-1/kubelet"},
+		{"control-plane-eastus-1-2/kubelet", "control-plane-eastus-1/kubelet"},
+		{"my-cluster-control-plane-0/kubelet", "my-cluster-control-plane-0/kubelet"},
+		{"capz-yrfqhc-md-0-tdh4r-242qb/kubelet", "capz-yrfqhc-md-0/kubelet"},
+		{"stateful-app-0/app", "stateful-app-0/app"},
 	}
 	for _, testCase := range testCases {
 		v := RemoveDisambiguationInfixes(testCase.Input)

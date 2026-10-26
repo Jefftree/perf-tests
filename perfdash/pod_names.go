@@ -26,6 +26,13 @@ var /* const */ versionRegexp = regexp.MustCompile("^v[0-9].*")
 // misses ~90% of them and every node ends up as its own series.
 var /* const */ ec2InstanceIDHexRegexp = regexp.MustCompile("^[0-9a-f]{17}$")
 
+// kopsControlPlaneReplicaRegexp matches a trailing numeric kops HA instance-group suffix
+// after the GCE MIG hash has been stripped (e.g. control-plane-us-east1-b-1). Because the
+// replica index is shorter than 4 characters, looksLikeHash keeps it and splits replicas
+// away from the single-master control-plane-<zone> series. Requiring at least two zone
+// segments keeps numeric zone names like control-plane-eastus-1 intact.
+var /* const */ kopsControlPlaneReplicaRegexp = regexp.MustCompile(`^((?:.*-)?control-plane-[a-z0-9]+(?:-[a-z0-9]+)+)-[0-9]+$`)
+
 // RemoveDisambiguationInfixes removes (from pod/container names) version strings and hashes inserted replication controllers and the like.
 func RemoveDisambiguationInfixes(podAndContainer string) string {
 	split := strings.SplitN(podAndContainer, "/", 2)
@@ -41,6 +48,9 @@ func RemoveDisambiguationInfixes(podAndContainer string) string {
 			break
 		}
 		last = strings.Join(pieces[:i+1], "-")
+	}
+	if match := kopsControlPlaneReplicaRegexp.FindStringSubmatch(last); match != nil {
+		last = match[1]
 	}
 	return strings.Join([]string{last, container}, "/")
 }
