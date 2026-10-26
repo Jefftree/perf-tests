@@ -19,7 +19,9 @@ package common
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v2"
 	v1 "k8s.io/api/core/v1"
@@ -55,8 +57,12 @@ func createSystemPodMetricsMeasurement() measurement.Measurement {
 // When executing "gather", initial restart counts are subtracted from the current
 // restart counts. In effect, only restarts that happened during test execution
 // (between "start" and "gather") are visible in the final summary.
+// Restarts occurring between optional "pause" and "unpause" actions are also excluded.
 type systemPodMetricsMeasurement struct {
-	initSnapshot *systemPodsMetrics
+	lock                sync.Mutex
+	initSnapshot        *systemPodsMetrics
+	pauseSnapshot       *systemPodsMetrics
+	accumulatedRestarts map[string]map[string]int32
 }
 
 type containerMetrics struct {
@@ -82,21 +88,83 @@ func (m *systemPodMetricsMeasurement) Execute(config *measurement.Config) ([]mea
 		return nil, err
 	}
 
-	if action == "pause" {
-		return nil, nil
-	}
-	if action == "unpause" {
-		if m.initSnapshot == nil {
-			return nil, nil
-		}
-		metrics, err := getPodMetrics(config)
-		if err != nil {
-			return nil, err
-		}
-		m.initSnapshot = metrics
-		return nil, nil
-	}
+	m.lock.Lock()
+	defer m.lock.Unlock()
 
+	switch action {
+	case "start":
+		return m.start(config)
+	case "pause":
+		return nil, m.pause(config)
+	case "unpause":
+		return nil, m.unpause(config)
+	case "gather":
+		return m.gather(config)
+	default:
+		return nil, fmt.Errorf("unknown action %v", action)
+	}
+}
+
+func (m *systemPodMetricsMeasurement) start(config *measurement.Config) ([]measurement.Summary, error) {
+	systemPodMetricsEnabled, err := util.GetBoolOrDefault(config.Params, systemPodMetricsEnabledFlagName, false)
+	if err != nil {
+		return nil, err
+	}
+	if !systemPodMetricsEnabled {
+		m.initSnapshot = nil
+		m.pauseSnapshot = nil
+		m.accumulatedRestarts = nil
+		klog.V(2).Info("skipping collection of system pod metrics")
+		return []measurement.Summary{}, nil
+	}
+	if _, err := getThresholdOverrides(config); err != nil {
+		return nil, err
+	}
+	metrics, err := getPodMetrics(config)
+	if err != nil {
+		return nil, err
+	}
+	m.initSnapshot = metrics
+	m.pauseSnapshot = nil
+	m.accumulatedRestarts = nil
+	return nil, nil
+}
+
+func (m *systemPodMetricsMeasurement) pause(config *measurement.Config) error {
+	if m.initSnapshot == nil {
+		return nil
+	}
+	if m.pauseSnapshot != nil {
+		klog.Warningf("%s: measurement already paused", m)
+		return nil
+	}
+	metrics, err := getPodMetrics(config)
+	if err != nil {
+		return err
+	}
+	m.pauseSnapshot = metrics
+	return nil
+}
+
+func (m *systemPodMetricsMeasurement) unpause(config *measurement.Config) error {
+	if m.initSnapshot == nil {
+		return nil
+	}
+	if m.pauseSnapshot == nil {
+		klog.Warningf("%s: measurement already unpaused", m)
+		return nil
+	}
+	metrics, err := getPodMetrics(config)
+	if err != nil {
+		return err
+	}
+	m.accumulatedRestarts = accumulateActiveRestarts(m.accumulatedRestarts, m.initSnapshot, m.pauseSnapshot)
+	m.initSnapshot = metrics
+	m.pauseSnapshot = nil
+	return nil
+}
+
+func (m *systemPodMetricsMeasurement) gather(config *measurement.Config) ([]measurement.Summary, error) {
 	systemPodMetricsEnabled, err := util.GetBoolOrDefault(config.Params, systemPodMetricsEnabledFlagName, false)
 	if err != nil {
 		return nil, err
@@ -105,37 +173,35 @@ func (m *systemPodMetricsMeasurement) Execute(config *measurement.Config) ([]mea
 		klog.V(2).Info("skipping collection of system pod metrics")
 		return []measurement.Summary{}, nil
 	}
-
+	if m.initSnapshot == nil {
+		return nil, fmt.Errorf("start needs to be executed before gather")
+	}
+	overrides, err := getThresholdOverrides(config)
+	if err != nil {
+		return nil, err
+	}
 	metrics, err := getPodMetrics(config)
 	if err != nil {
 		return nil, err
 	}
 
-	overrides, err := getThresholdOverrides(config)
+	accumulated := m.accumulatedRestarts
+	baseline := m.initSnapshot
+	if m.pauseSnapshot != nil {
+		accumulated = accumulateActiveRestarts(m.accumulatedRestarts, m.initSnapshot, m.pauseSnapshot)
+		baseline = metrics
+	}
+	subtractInitialRestartCounts(metrics, baseline)
+	addAccumulatedRestartCounts(metrics, accumulated)
+
+	summary, err := buildSummary(metrics)
 	if err != nil {
 		return nil, err
 	}
-
-	switch action {
-	case "start":
-		m.initSnapshot = metrics
-		return nil, nil
-	case "gather":
-		if m.initSnapshot == nil {
-			return nil, fmt.Errorf("start needs to be executed before gather")
-		}
-		subtractInitialRestartCounts(metrics, m.initSnapshot)
-		summary, err := buildSummary(metrics)
-		if err != nil {
-			return nil, err
-		}
-		if err = validateRestartCounts(metrics, config, overrides); err != nil {
-			return summary, err
-		}
-		return summary, nil
-	default:
-		return nil, fmt.Errorf("unknown action %v", action)
+	if err = validateRestartCounts(metrics, config, overrides); err != nil {
+		return summary, err
 	}
+	return summary, nil
 }
 
 func getPodMetrics(config *measurement.Config) (*systemPodsMetrics, error) {
@@ -157,30 +223,84 @@ func getPodList(client kubernetes.Interface) (*v1.PodList, error) {
 	return lst, nil
 }
 
-func subtractInitialRestartCounts(metrics *systemPodsMetrics, initMetrics *systemPodsMetrics) {
-	// podName -> containerName -> restartCount
-	initRestarts := make(map[string]map[string]int32)
+func accumulateActiveRestarts(accumulated map[string]map[string]int32, baselineMetrics, currentMetrics *systemPodsMetrics) map[string]map[string]int32 {
+	result := make(map[string]map[string]int32, len(accumulated))
+	for podName, containers := range accumulated {
+		result[podName] = maps.Clone(containers)
+	}
+	if currentMetrics == nil {
+		return result
+	}
 
-	for _, initPod := range initMetrics.Pods {
-		initRestarts[initPod.Name] = make(map[string]int32)
-		for _, initContainer := range initPod.Containers {
-			initRestarts[initPod.Name][initContainer.Name] = initContainer.RestartCount
+	baselineRestarts := buildRestartCountMap(baselineMetrics)
+	for _, pod := range currentMetrics.Pods {
+		for _, container := range pod.Containers {
+			delta := container.RestartCount
+			if baselineCount, ok := baselineRestarts[pod.Name][container.Name]; ok {
+				delta = activeRestartsSinceBaseline(container.RestartCount, baselineCount)
+			}
+			if delta == 0 {
+				continue
+			}
+			if result[pod.Name] == nil {
+				result[pod.Name] = make(map[string]int32)
+			}
+			result[pod.Name][container.Name] += delta
 		}
 	}
+	return result
+}
+
+func subtractInitialRestartCounts(metrics *systemPodsMetrics, initMetrics *systemPodsMetrics) {
+	initRestarts := buildRestartCountMap(initMetrics)
 
 	for _, pod := range metrics.Pods {
 		for i, container := range pod.Containers {
-			initPod, ok := initRestarts[pod.Name]
+			initRestartCount, ok := initRestarts[pod.Name][container.Name]
 			if !ok {
 				continue
 			}
-			initRestartCount, ok := initPod[container.Name]
-			if !ok {
-				continue
-			}
-			pod.Containers[i].RestartCount -= initRestartCount
+			pod.Containers[i].RestartCount = activeRestartsSinceBaseline(container.RestartCount, initRestartCount)
 		}
 	}
+}
+
+func addAccumulatedRestartCounts(metrics *systemPodsMetrics, accumulated map[string]map[string]int32) {
+	if len(accumulated) == 0 {
+		return
+	}
+	for _, pod := range metrics.Pods {
+		podAccumulated := accumulated[pod.Name]
+		if len(podAccumulated) == 0 {
+			continue
+		}
+		for i, container := range pod.Containers {
+			pod.Containers[i].RestartCount += podAccumulated[container.Name]
+		}
+	}
+}
+
+func buildRestartCountMap(metrics *systemPodsMetrics) map[string]map[string]int32 {
+	if metrics == nil {
+		return nil
+	}
+	restarts := make(map[string]map[string]int32, len(metrics.Pods))
+	for _, pod := range metrics.Pods {
+		containers := make(map[string]int32, len(pod.Containers))
+		for _, container := range pod.Containers {
+			containers[container.Name] = container.RestartCount
+		}
+		restarts[pod.Name] = containers
+	}
+	return restarts
+}
+
+func activeRestartsSinceBaseline(currentCount, baselineCount int32) int32 {
+	if currentCount >= baselineCount {
+		return currentCount - baselineCount
+	}
+	// Container restart count dropped below baseline because the pod was recreated with the same name.
+	return currentCount
 }
 
 func validateRestartCounts(metrics *systemPodsMetrics, config *measurement.Config, overrides map[string]int) error {
