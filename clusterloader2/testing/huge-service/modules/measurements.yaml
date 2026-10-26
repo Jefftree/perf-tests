@@ -61,6 +61,20 @@ steps:
       allowedSlowCalls: {{$allowedSlowCalls}}
       customThresholds: {{YamlQuote $CUSTOM_API_CALL_THRESHOLDS 4}}
       singleResourceThreshold: {{$SINGLE_RESOURCE_API_LATENCY_THRESHOLD}}
+  - Identifier: InitEvents
+    Method: GenericPrometheusQuery
+    Params:
+      action: {{$action}}
+      # Distinct metricName avoids colliding with load's "Init Events" in PerfDash GenericMeasurements.
+      metricName: Huge Service Init Events
+      metricVersion: v1
+      unit: events
+      dimensions:
+      - group
+      - resource
+      queries:
+      - name: Init events
+        query: sum(increase(apiserver_init_events_total[%v])) by (group, resource)
   - Identifier: TestMetrics
     Method: TestMetrics
     Params:

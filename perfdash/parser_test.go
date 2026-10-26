@@ -344,3 +344,103 @@ func Test_getJobDataGenericMeasurementsWithMatchAllTests(t *testing.T) {
 	require.Len(t, items, 1)
 	assert.InDelta(t, 988.03, items[0].Data["PutThroughput"], 0.01)
 }
+
+func Test_getJobDataInitEventsCountFallback(t *testing.T) {
+	job := "ci-kubernetes-e2e-gce-scale-performance-5000"
+	legacyLoadArtifact := "artifacts/MetricsForE2E_load_2026-10-13T18:48:15Z.json"
+	legacyHugeServiceArtifact := "artifacts/MetricsForE2E_huge-service_2026-10-13T18:58:55Z.json"
+	promLoadArtifact := "artifacts/GenericPrometheusQuery Init Events_load_2026-10-25T18:46:49Z.json"
+	promHugeServiceArtifact := "artifacts/GenericPrometheusQuery Huge Service Init Events_huge-service_2026-10-25T18:59:25Z.json"
+	legacyLoadPayload := []byte(`{
+		"APIServerMetrics": {
+			"apiserver_init_events_total": [{
+				"metric": {"__name__": "apiserver_init_events_total", "group": "", "resource": "pods"},
+				"value": [1760381295, "66346343"]
+			}]
+		}
+	}`)
+	legacyHugeServicePayload := []byte(`{
+		"APIServerMetrics": {
+			"apiserver_init_events_total": [{
+				"metric": {"__name__": "apiserver_init_events_total", "group": "", "resource": "pods"},
+				"value": [1760381935, "66602720"]
+			}]
+		}
+	}`)
+
+	bucket := &fakeMetricsBucket{
+		builds: []int{1, 2},
+		files: map[string][]byte{
+			// Build 1 only has legacy MetricsForE2E (historical or non-Prometheus job).
+			joinStringsAndInts(job, 1, legacyLoadArtifact):        legacyLoadPayload,
+			joinStringsAndInts(job, 1, legacyHugeServiceArtifact): legacyHugeServicePayload,
+			// Build 2 has both GenericPrometheusQuery and legacy MetricsForE2E.
+			joinStringsAndInts(job, 2, legacyLoadArtifact):        legacyLoadPayload,
+			joinStringsAndInts(job, 2, legacyHugeServiceArtifact): legacyHugeServicePayload,
+			joinStringsAndInts(job, 2, promLoadArtifact): []byte(`{
+				"version": "v1",
+				"dataItems": [{
+					"data": {"Init events": 82532448},
+					"unit": "events",
+					"labels": {"group": "", "resource": "pods"}
+				}]
+			}`),
+			joinStringsAndInts(job, 2, promHugeServiceArtifact): []byte(`{
+				"version": "v1",
+				"dataItems": [{
+					"data": {"Init events": 151466},
+					"unit": "events",
+					"labels": {"group": "", "resource": "pods"}
+				}]
+			}`),
+		},
+	}
+
+	downloader := NewDownloader(&DownloaderOptions{DefaultBuildsCount: 2}, bucket, false)
+	result := make(JobToCategoryData)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	wg.Add(1)
+	downloader.getJobData(&wg, result, &mu, job, Tests{
+		Prefix:       "gce-5000Nodes",
+		Descriptions: performanceDescriptions,
+		BuildsCount:  2,
+		ArtifactsDir: "artifacts",
+	})
+	wg.Wait()
+
+	require.Contains(t, result, "gce-5000Nodes")
+	require.Contains(t, result["gce-5000Nodes"], "APIServer")
+	require.Contains(t, result["gce-5000Nodes"]["APIServer"], "LoadInitEventsCount")
+	require.Contains(t, result["gce-5000Nodes"]["APIServer"], "HugeServiceInitEventsCount")
+
+	loadBuild1 := result["gce-5000Nodes"]["APIServer"]["LoadInitEventsCount"].Builds.Builds("1")
+	require.Len(t, loadBuild1, 1)
+	assert.Equal(t, map[string]string{"group": "", "resource": "pods"}, loadBuild1[0].Labels)
+	assert.InDelta(t, 66346343, loadBuild1[0].Data["InitEventsCount"], 0.01)
+
+	loadBuild2 := result["gce-5000Nodes"]["APIServer"]["LoadInitEventsCount"].Builds.Builds("2")
+	require.Len(t, loadBuild2, 1)
+	assert.Equal(t, map[string]string{"group": "", "resource": "pods"}, loadBuild2[0].Labels)
+	assert.InDelta(t, 82532448, loadBuild2[0].Data["Init events"], 0.01)
+
+	hugeBuild1 := result["gce-5000Nodes"]["APIServer"]["HugeServiceInitEventsCount"].Builds.Builds("1")
+	require.Len(t, hugeBuild1, 1)
+	assert.Equal(t, map[string]string{"group": "", "resource": "pods"}, hugeBuild1[0].Labels)
+	assert.InDelta(t, 66602720, hugeBuild1[0].Data["InitEventsCount"], 0.01)
+
+	hugeBuild2 := result["gce-5000Nodes"]["APIServer"]["HugeServiceInitEventsCount"].Builds.Builds("2")
+	require.Len(t, hugeBuild2, 1)
+	assert.Equal(t, map[string]string{"group": "", "resource": "pods"}, hugeBuild2[0].Labels)
+	assert.InDelta(t, 151466, hugeBuild2[0].Data["Init events"], 0.01)
+
+	// GenericMeasurements must keep load ("Init Events") and huge-service ("Huge Service Init Events") separate.
+	require.Contains(t, result["gce-5000Nodes"], "GenericMeasurements")
+	loadGeneric := result["gce-5000Nodes"]["GenericMeasurements"]["Init Events"].Builds.Builds("2")
+	require.Len(t, loadGeneric, 1)
+	assert.InDelta(t, 82532448, loadGeneric[0].Data["Init events"], 0.01)
+
+	hugeGeneric := result["gce-5000Nodes"]["GenericMeasurements"]["Huge Service Init Events"].Builds.Builds("2")
+	require.Len(t, hugeGeneric, 1)
+	assert.InDelta(t, 151466, hugeGeneric[0].Data["Init events"], 0.01)
+}

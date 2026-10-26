@@ -40,6 +40,9 @@ type TestDescription struct {
 	Parser                      func(data []byte, buildNumber int, testResult *BuildData)
 	FetchMetricNameFromArtifact bool
 	MatchAllTests               bool
+	// Fallback skips this description when an earlier description in the same
+	// metric slice already matched artifacts for the current build.
+	Fallback bool
 }
 
 // TestDescriptions is a map job->component->description.
@@ -263,11 +266,19 @@ var (
 				OutputFilePrefix: "MetricsForE2E",
 				Parser:           parseApiserverRequestCount,
 			}},
-			"LoadInitEventsCount": []TestDescription{{
-				Name:             "load",
-				OutputFilePrefix: "GenericPrometheusQuery Init Events",
-				Parser:           parsePerfData,
-			}},
+			"LoadInitEventsCount": []TestDescription{
+				{
+					Name:             "load",
+					OutputFilePrefix: "GenericPrometheusQuery Init Events",
+					Parser:           parsePerfData,
+				},
+				{
+					Name:             "load",
+					OutputFilePrefix: "MetricsForE2E",
+					Parser:           parseApiserverInitEventsCount,
+					Fallback:         true,
+				},
+			},
 			"LoadWatchCacheInitializationDurationMax": []TestDescription{{
 				Name:             "load",
 				OutputFilePrefix: "GenericPrometheusQuery Watch Cache Initialization Duration Max",
@@ -330,11 +341,19 @@ var (
 				OutputFilePrefix: "MetricsForE2E",
 				Parser:           parseApiserverRequestCount,
 			}},
-			"HugeServiceInitEventsCount": []TestDescription{{
-				Name:             "huge-service",
-				OutputFilePrefix: "MetricsForE2E",
-				Parser:           parseApiserverInitEventsCount,
-			}},
+			"HugeServiceInitEventsCount": []TestDescription{
+				{
+					Name:             "huge-service",
+					OutputFilePrefix: "GenericPrometheusQuery Huge Service Init Events",
+					Parser:           parsePerfData,
+				},
+				{
+					Name:             "huge-service",
+					OutputFilePrefix: "MetricsForE2E",
+					Parser:           parseApiserverInitEventsCount,
+					Fallback:         true,
+				},
+			},
 		},
 		"Scheduler": {
 			"SchedulingLatency": []TestDescription{

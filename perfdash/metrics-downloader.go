@@ -162,7 +162,11 @@ func (g *Downloader) getJobData(wg *sync.WaitGroup, result JobToCategoryData, re
 		klog.Infof("Fetching %s build %v...", job, buildNumber)
 		for categoryLabel, categoryMap := range tests.Descriptions {
 			for testLabel, testDescriptions := range categoryMap {
+				matched := false
 				for _, testDescription := range testDescriptions {
+					if testDescription.Fallback && matched {
+						continue
+					}
 					if !g.allowParsersForAllTests && !testDescription.MatchAllTests && testDescription.Name == "" {
 						continue
 					}
@@ -193,6 +197,7 @@ func (g *Downloader) getJobData(wg *sync.WaitGroup, result JobToCategoryData, re
 						}
 						buildData := getBuildData(result, tests.Prefix, resultCategory, testLabel, job, resultLock)
 						testDescription.Parser(testDataResponse, buildNumber, buildData)
+						matched = true
 					}
 				}
 			}

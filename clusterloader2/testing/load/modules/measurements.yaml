@@ -398,7 +398,7 @@ steps:
       - resource
       queries:
       - name: Init events
-        query: sum(apiserver_init_events_total) by (group, resource)
+        query: sum(increase(apiserver_init_events_total[%v])) by (group, resource)
 {{if $ENABLE_QUOTAS_USAGE_MEASUREMENT}}
   - Identifier: Quotas total usage
     Method: GenericPrometheusQuery
