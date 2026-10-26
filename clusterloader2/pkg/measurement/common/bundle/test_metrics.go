@@ -17,12 +17,19 @@ limitations under the License.
 package bundle
 
 import (
+	"context"
 	"fmt"
+	"strconv"
+	"text/template"
 
 	goerrors "github.com/go-errors/errors"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	clconfig "k8s.io/perf-tests/clusterloader2/pkg/config"
 	"k8s.io/perf-tests/clusterloader2/pkg/errors"
 	"k8s.io/perf-tests/clusterloader2/pkg/measurement"
+	"k8s.io/perf-tests/clusterloader2/pkg/provider"
 	"k8s.io/perf-tests/clusterloader2/pkg/util"
 )
 
@@ -44,6 +51,9 @@ func createTestMetricsMeasurement() measurement.Measurement {
 	}
 	if metrics.schedulingMetrics, err = measurement.CreateMeasurement("SchedulingMetrics"); err != nil {
 		klog.Errorf("%v: schedulingMetrics creation error: %v", metrics, err)
+	}
+	if metrics.prometheusSchedulingMetrics, err = measurement.CreateMeasurement("PrometheusSchedulingMetrics"); err != nil {
+		klog.Errorf("%v: prometheusSchedulingMetrics creation error: %v", metrics, err)
 	}
 	if metrics.metricsForE2E, err = measurement.CreateMeasurement("MetricsForE2E"); err != nil {
 		klog.Errorf("%v: metricsForE2E creation error: %v", metrics, err)
@@ -108,6 +118,8 @@ func createTestMetricsMeasurement() measurement.Measurement {
 type testMetrics struct {
 	etcdMetrics                    measurement.Measurement
 	schedulingMetrics              measurement.Measurement
+	prometheusSchedulingMetrics    measurement.Measurement
+	activeSchedulingMetrics        measurement.Measurement
 	metricsForE2E                  measurement.Measurement
 	resourceUsageSummary           measurement.Measurement
 	etcdCPUProfile                 measurement.Measurement
@@ -142,11 +154,16 @@ func (t *testMetrics) Execute(config *measurement.Config) ([]measurement.Summary
 	actionStartConfig := createConfig(config, map[string]interface{}{
 		"action": "start",
 	})
-	actionResetConfig := createConfig(config, map[string]interface{}{
-		"action": "reset",
-	})
 	actionGatherConfig := createConfig(config, map[string]interface{}{
 		"action": "gather",
+	})
+	schedulingStartConfig := createConfig(config, map[string]interface{}{
+		"action":      "start",
+		"summaryName": "SchedulingMetrics",
+	})
+	schedulingGatherConfig := createConfig(config, map[string]interface{}{
+		"action":      "gather",
+		"summaryName": "SchedulingMetrics",
 	})
 	etcdStartConfig := createConfig(config, map[string]interface{}{
 		"action":        "start",
@@ -193,8 +210,9 @@ func (t *testMetrics) Execute(config *measurement.Config) ([]measurement.Summary
 	case "start":
 		summary, err := execute(t.etcdMetrics, actionStartConfig)
 		appendResults(&summaries, errList, summary, executeError(t.etcdMetrics.String(), action, err))
-		summary, err = execute(t.schedulingMetrics, actionResetConfig)
-		appendResults(&summaries, errList, summary, executeError(t.schedulingMetrics.String(), action, err))
+		t.activeSchedulingMetrics = t.selectSchedulingMetrics(config)
+		summary, err = execute(t.activeSchedulingMetrics, schedulingStartConfig)
+		appendResults(&summaries, errList, summary, executeError(measurementName(t.activeSchedulingMetrics), action, err))
 		summary, err = execute(t.resourceUsageSummary, actionStartConfig)
 		appendResults(&summaries, errList, summary, executeError(t.resourceUsageSummary.String(), action, err))
 		summary, err = execute(t.etcdCPUProfile, etcdStartConfig)
@@ -242,8 +260,12 @@ func (t *testMetrics) Execute(config *measurement.Config) ([]measurement.Summary
 	case "gather":
 		summary, err := execute(t.etcdMetrics, actionGatherConfig)
 		appendResults(&summaries, errList, summary, executeError(t.etcdMetrics.String(), action, err))
-		summary, err = execute(t.schedulingMetrics, actionGatherConfig)
-		appendResults(&summaries, errList, summary, executeError(t.schedulingMetrics.String(), action, err))
+		schedulingMetrics := t.activeSchedulingMetrics
+		if schedulingMetrics == nil {
+			schedulingMetrics = t.schedulingMetrics
+		}
+		summary, err = execute(schedulingMetrics, schedulingGatherConfig)
+		appendResults(&summaries, errList, summary, executeError(measurementName(schedulingMetrics), action, err))
 		summary, err = execute(t.metricsForE2E, config)
 		appendResults(&summaries, errList, summary, executeError(t.metricsForE2E.String(), action, err))
 		summary, err = execute(t.resourceUsageSummary, actionGatherConfig)
@@ -295,30 +317,136 @@ func (t *testMetrics) Execute(config *measurement.Config) ([]measurement.Summary
 
 // Dispose cleans up after the measurement.
 func (t *testMetrics) Dispose() {
-	t.etcdMetrics.Dispose()
-	t.schedulingMetrics.Dispose()
-	t.metricsForE2E.Dispose()
-	t.resourceUsageSummary.Dispose()
-	t.etcdCPUProfile.Dispose()
-	t.etcdMemoryProfile.Dispose()
-	t.etcdBlockProfile.Dispose()
-	t.etcdEventsCPUProfile.Dispose()
-	t.etcdEventsMemoryProfile.Dispose()
-	t.etcdEventsBlockProfile.Dispose()
-	t.apiserverCPUProfile.Dispose()
-	t.apiserverMemoryProfile.Dispose()
-	t.apiserverBlockProfile.Dispose()
-	t.schedulerCPUProfile.Dispose()
-	t.schedulerMemoryProfile.Dispose()
-	t.schedulerBlockProfile.Dispose()
-	t.controllerManagerCPUProfile.Dispose()
-	t.controllerManagerMemoryProfile.Dispose()
-	t.controllerManagerBlockProfile.Dispose()
+	for _, m := range []measurement.Measurement{
+		t.etcdMetrics,
+		t.schedulingMetrics,
+		t.prometheusSchedulingMetrics,
+		t.metricsForE2E,
+		t.resourceUsageSummary,
+		t.etcdCPUProfile,
+		t.etcdMemoryProfile,
+		t.etcdBlockProfile,
+		t.etcdEventsCPUProfile,
+		t.etcdEventsMemoryProfile,
+		t.etcdEventsBlockProfile,
+		t.apiserverCPUProfile,
+		t.apiserverMemoryProfile,
+		t.apiserverBlockProfile,
+		t.schedulerCPUProfile,
+		t.schedulerMemoryProfile,
+		t.schedulerBlockProfile,
+		t.controllerManagerCPUProfile,
+		t.controllerManagerMemoryProfile,
+		t.controllerManagerBlockProfile,
+	} {
+		if m != nil {
+			m.Dispose()
+		}
+	}
 }
 
 // String returns a string representation of the measurement.
 func (*testMetrics) String() string {
 	return testMetricsMeasurementName
+}
+
+func (t *testMetrics) selectSchedulingMetrics(config *measurement.Config) measurement.Measurement {
+	if shouldUsePrometheusSchedulingMetrics(config) && t.prometheusSchedulingMetrics != nil {
+		return t.prometheusSchedulingMetrics
+	}
+	return t.schedulingMetrics
+}
+
+// shouldUsePrometheusSchedulingMetrics mirrors prometheus.NewController's master-ip
+// ServiceMonitor gating so TestMetrics only queries Prometheus when kube-scheduler is scraped.
+func shouldUsePrometheusSchedulingMetrics(config *measurement.Config) bool {
+	if config == nil {
+		return false
+	}
+	prometheusClient, err := util.GetStringOrDefault(config.Params, "prometheusClient", "inCluster")
+	if err != nil {
+		return false
+	}
+	if prometheusClient == "managed" {
+		return resolveCloudProvider(config) != nil
+	}
+	if prometheusClient != "inCluster" || config.PrometheusFramework == nil {
+		return false
+	}
+
+	var scrapeApiserverOnly, scrapeApiserverOnlySet bool
+	if config.ClusterLoaderConfig != nil {
+		clusterCfg := config.ClusterLoaderConfig.ClusterConfig
+		promCfg := config.ClusterLoaderConfig.PrometheusConfig
+		if !promCfg.UseExistingServer {
+			if clusterCfg.MasterDNSEndpoint != "" {
+				return false
+			}
+			if promCfg.ScrapeMastersWithPublicIPs && len(clusterCfg.MasterIPs) == 0 {
+				return false
+			}
+			if config.PrometheusFramework.GetClientSets() != nil {
+				ep, err := config.PrometheusFramework.GetClientSets().GetClient().CoreV1().Endpoints("monitoring").Get(context.TODO(), "master", metav1.GetOptions{})
+				if err != nil || !hasKubeSchedulerEndpoint(ep) {
+					return false
+				}
+			}
+		}
+		if mapping, errList := clconfig.GetMapping(config.ClusterLoaderConfig, nil); errList == nil || errList.IsEmpty() {
+			if raw, exists := mapping["PROMETHEUS_SCRAPE_APISERVER_ONLY"]; exists && raw != nil {
+				scrapeApiserverOnly, _ = template.IsTrue(raw)
+				scrapeApiserverOnlySet = true
+			}
+		}
+		if !scrapeApiserverOnlySet {
+			if parsed, err := strconv.ParseBool(promCfg.ScrapeApiserverOnly); err == nil {
+				scrapeApiserverOnly, scrapeApiserverOnlySet = parsed, true
+			}
+		}
+	}
+	if !scrapeApiserverOnlySet {
+		if p := resolveCloudProvider(config); p != nil {
+			scrapeApiserverOnly = p.Features().ShouldPrometheusScrapeApiserverOnly
+		}
+	}
+	return !scrapeApiserverOnly
+}
+
+func resolveCloudProvider(config *measurement.Config) provider.Provider {
+	if config.CloudProvider != nil {
+		return config.CloudProvider
+	}
+	if config.ClusterLoaderConfig != nil && config.ClusterLoaderConfig.ClusterConfig.Provider != nil {
+		return config.ClusterLoaderConfig.ClusterConfig.Provider
+	}
+	if config.ClusterFramework != nil && config.ClusterFramework.GetClusterConfig() != nil {
+		return config.ClusterFramework.GetClusterConfig().Provider
+	}
+	return nil
+}
+
+func hasKubeSchedulerEndpoint(ep *corev1.Endpoints) bool {
+	if ep == nil {
+		return false
+	}
+	for _, subset := range ep.Subsets {
+		if len(subset.Addresses) == 0 {
+			continue
+		}
+		for _, port := range subset.Ports {
+			if port.Name == "kube-scheduler" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func measurementName(m measurement.Measurement) string {
+	if m == nil {
+		return "SchedulingMetrics"
+	}
+	return m.String()
 }
 
 func createConfig(config *measurement.Config, overrides map[string]interface{}) *measurement.Config {
@@ -329,13 +457,9 @@ func createConfig(config *measurement.Config, overrides map[string]interface{}) 
 	for k, v := range overrides {
 		params[k] = v
 	}
-	return &measurement.Config{
-		ClusterFramework:    config.ClusterFramework,
-		PrometheusFramework: config.PrometheusFramework,
-		Params:              params,
-		TemplateProvider:    config.TemplateProvider,
-		CloudProvider:       config.CloudProvider,
-	}
+	cfg := *config
+	cfg.Params = params
+	return &cfg
 }
 
 func execute(m measurement.Measurement, config *measurement.Config) ([]measurement.Summary, error) {

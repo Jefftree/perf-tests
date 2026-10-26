@@ -344,3 +344,68 @@ func Test_getJobDataGenericMeasurementsWithMatchAllTests(t *testing.T) {
 	require.Len(t, items, 1)
 	assert.InDelta(t, 988.03, items[0].Data["PutThroughput"], 0.01)
 }
+
+func Test_getJobDataLoadSchedulingLatencyCompatibility(t *testing.T) {
+	job := "ci-kubernetes-e2e-load"
+	artifactPath := "artifacts/SchedulingMetrics_load_2026-01-01T00:00:00Z.json"
+	bucket := &fakeMetricsBucket{
+		builds: []int{42},
+		files: map[string][]byte{
+			joinStringsAndInts(job, 42, artifactPath): []byte(`{
+				"frameworkExtensionPointDuration": {
+					"Bind": {"Perc50": 10000000, "Perc90": 20000000, "Perc99": 50000000},
+					"Filter": {"Perc50": 200000, "Perc90": 500000, "Perc99": 1000000},
+					"Permit": {"Perc50": 50000, "Perc90": 90000, "Perc99": 100000},
+					"PostBind": {"Perc50": 50000, "Perc90": 90000, "Perc99": 100000},
+					"PostFilter": {"Perc50": 0, "Perc90": 0, "Perc99": 0},
+					"PreBind": {"Perc50": 100000, "Perc90": 200000, "Perc99": 5000000},
+					"PreFilter": {"Perc50": 100000, "Perc90": 200000, "Perc99": 500000},
+					"PreScore": {"Perc50": 1000000, "Perc90": 2000000, "Perc99": 4000000},
+					"Reserve": {"Perc50": 50000, "Perc90": 90000, "Perc99": 100000},
+					"Score": {"Perc50": 500000, "Perc90": 1000000, "Perc99": 2000000},
+					"Unreserve": {"Perc50": 0, "Perc90": 0, "Perc99": 0}
+				},
+				"preemptionEvaluationLatency": {"Perc50": 0, "Perc90": 0, "Perc99": 0},
+				"e2eSchedulingLatency": {"Perc50": 100000000, "Perc90": 250000000, "Perc99": 500000000},
+				"schedulingLatency": {"Perc50": 2000000, "Perc90": 5000000, "Perc99": 10000000}
+			}`),
+		},
+	}
+
+	downloader := NewDownloader(&DownloaderOptions{DefaultBuildsCount: 1}, bucket, false)
+	result := make(JobToCategoryData)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	wg.Add(1)
+	downloader.getJobData(&wg, result, &mu, job, Tests{
+		Prefix:       "e2e-load",
+		Descriptions: performanceDescriptions,
+		BuildsCount:  1,
+		ArtifactsDir: "artifacts",
+	})
+	wg.Wait()
+
+	require.Contains(t, result, "e2e-load")
+	require.Contains(t, result["e2e-load"], "Scheduler")
+	for _, metricName := range []string{"LoadSchedulingLatency", "SchedulingLatency"} {
+		require.Contains(t, result["e2e-load"]["Scheduler"], metricName)
+		buildData := result["e2e-load"]["Scheduler"][metricName]
+		assert.Equal(t, "v1", buildData.Version)
+		items := buildData.Builds.Builds("42")
+		require.Len(t, items, 14)
+
+		byOp := make(map[string]perftype.DataItem, len(items))
+		for _, item := range items {
+			assert.Equal(t, "ms", item.Unit)
+			assert.Equal(t, "load", item.Labels["TestName"])
+			byOp[item.Labels["Operation"]] = item
+		}
+		assert.InDelta(t, 100.0, byOp["e2eScheduling"].Data["Perc50"], 1e-6)
+		assert.InDelta(t, 250.0, byOp["e2eScheduling"].Data["Perc90"], 1e-6)
+		assert.InDelta(t, 500.0, byOp["e2eScheduling"].Data["Perc99"], 1e-6)
+		assert.InDelta(t, 2.0, byOp["scheduling"].Data["Perc50"], 1e-6)
+		assert.InDelta(t, 10.0, byOp["scheduling"].Data["Perc99"], 1e-6)
+		assert.InDelta(t, 50.0, byOp["Bind"].Data["Perc99"], 1e-6)
+		assert.InDelta(t, 0.0, byOp["preemption_evaluation"].Data["Perc99"], 1e-6)
+	}
+}

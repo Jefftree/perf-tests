@@ -66,6 +66,9 @@ func (g *prometheusSchedulerLatencyGatherer) String() string {
 }
 
 func (g *prometheusSchedulerLatencyGatherer) Gather(executor QueryExecutor, startTime, endTime time.Time, config *measurement.Config) ([]measurement.Summary, error) {
+	if startTime.IsZero() || !endTime.After(startTime) {
+		return nil, fmt.Errorf("invalid measurement window [%s, %s)", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+	}
 	window := endTime.Sub(startTime)
 	promWindow := measurementutil.ToPrometheusTime(window)
 
@@ -145,8 +148,17 @@ func (g *prometheusSchedulerLatencyGatherer) Gather(executor QueryExecutor, star
 		return nil, err
 	}
 
+	defaultSummaryName := prometheusSchedulingMetricsMeasurementName
+	if config.Identifier != "" {
+		defaultSummaryName = config.Identifier + "_" + prometheusSchedulingMetricsMeasurementName
+	}
+	summaryName, err := util.GetStringOrDefault(config.Params, "summaryName", defaultSummaryName)
+	if err != nil {
+		return nil, err
+	}
+
 	summaries := []measurement.Summary{
-		measurement.CreateSummary(config.Identifier+"_"+prometheusSchedulingMetricsMeasurementName, "json", content),
+		measurement.CreateSummary(summaryName, "json", content),
 	}
 	return summaries, nil
 }
