@@ -341,7 +341,9 @@ steps:
       dimensions:
       - container
       queries:
-      - query: sum by (container, pod, instance) (rate(container_cpu_usage_seconds_total[1m]))
+      - query: |
+          max by (container) (sum by (container, pod, instance) (rate(container_cpu_usage_seconds_total{container=~"kube-controller-manager|kube-scheduler"}[1m])))
+          or sum by (container, pod, instance) (rate(container_cpu_usage_seconds_total{container!="", container!~"kube-controller-manager|kube-scheduler"}[1m]))
         aggregations:
         - Perc99
         - Perc90
@@ -356,7 +358,9 @@ steps:
       dimensions:
       - container
       queries:
-      - query: sum by (container, pod, instance) (container_memory_working_set_bytes / 1024 / 1024)
+      - query: |
+          max by (container) (sum by (container, pod, instance) (container_memory_working_set_bytes{container=~"kube-controller-manager|kube-scheduler"} / 1024 / 1024))
+          or sum by (container, pod, instance) (container_memory_working_set_bytes{container!="", container!~"kube-controller-manager|kube-scheduler"} / 1024 / 1024)
         aggregations:
         - Perc99
         - Perc90
@@ -753,7 +757,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: rate(go_memstats_alloc_bytes_total{job="master"}[1m])
+      - query: |
+          max by (endpoint) (rate(go_memstats_alloc_bytes_total{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}[1m]))
+          or rate(go_memstats_alloc_bytes_total{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}[1m])
         aggregations:
         - Max
         - Perc99
@@ -770,7 +776,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: rate(go_memstats_mallocs_total{job="master"}[1m])
+      - query: |
+          max by (endpoint) (rate(go_memstats_mallocs_total{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}[1m]))
+          or rate(go_memstats_mallocs_total{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}[1m])
         aggregations:
         - Max
         - Perc99
@@ -787,7 +795,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: rate(go_sync_mutex_wait_total_seconds_total{job="master"}[1m])
+      - query: |
+          max by (endpoint) (rate(go_sync_mutex_wait_total_seconds_total{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}[1m]))
+          or rate(go_sync_mutex_wait_total_seconds_total{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}[1m])
         aggregations:
         - Max
         - Perc99
@@ -804,7 +814,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: rate(go_gc_duration_seconds_sum{job="master"}[1m])
+      - query: |
+          max by (endpoint) (rate(go_gc_duration_seconds_sum{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}[1m]))
+          or rate(go_gc_duration_seconds_sum{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}[1m])
         aggregations:
         - Max
         - Perc99
@@ -821,7 +833,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: histogram_quantile(0.99, sum(rate(go_sched_latencies_seconds_bucket{job="master"}[1m])) by (endpoint, le))
+      - query: |
+          max by (endpoint) (histogram_quantile(0.99, sum by (endpoint, instance, le) (rate(go_sched_latencies_seconds_bucket{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}[1m]))))
+          or histogram_quantile(0.99, sum by (endpoint, le) (rate(go_sched_latencies_seconds_bucket{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}[1m])))
         aggregations:
         - Max
         - Perc99
@@ -838,7 +852,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: rate(go_cpu_classes_user_cpu_seconds_total{job="master"}[1m])
+      - query: |
+          max by (endpoint) (rate(go_cpu_classes_user_cpu_seconds_total{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}[1m]))
+          or rate(go_cpu_classes_user_cpu_seconds_total{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}[1m])
         aggregations:
         - Max
         - Perc99
@@ -855,7 +871,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: rate(go_cpu_classes_gc_mark_assist_cpu_seconds_total{job="master"}[1m])
+      - query: |
+          max by (endpoint) (rate(go_cpu_classes_gc_mark_assist_cpu_seconds_total{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}[1m]))
+          or rate(go_cpu_classes_gc_mark_assist_cpu_seconds_total{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}[1m])
         aggregations:
         - Max
         - Perc99
@@ -872,7 +890,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: go_sched_goroutines_runnable_goroutines{job="master"}
+      - query: |
+          max by (endpoint) (go_sched_goroutines_runnable_goroutines{job="master", endpoint=~"kube-controller-manager|kube-scheduler"})
+          or go_sched_goroutines_runnable_goroutines{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}
         aggregations:
         - Max
         - Perc99
@@ -889,7 +909,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: go_memstats_next_gc_bytes{job="master"}
+      - query: |
+          max by (endpoint) (go_memstats_next_gc_bytes{job="master", endpoint=~"kube-controller-manager|kube-scheduler"})
+          or go_memstats_next_gc_bytes{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}
         aggregations:
         - Max
         - Perc99
@@ -905,7 +927,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: rate(go_memstats_alloc_bytes_total{job="master"}[1m]) * (100 + go_gc_gogc_percent{job="master"}) / (8192 * go_gc_gogc_percent{job="master"}) / 1.7e6
+      - query: |
+          max by (endpoint) (rate(go_memstats_alloc_bytes_total{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}[1m]) * (100 + go_gc_gogc_percent{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}) / (8192 * go_gc_gogc_percent{job="master", endpoint=~"kube-controller-manager|kube-scheduler"}) / 1.7e6)
+          or (rate(go_memstats_alloc_bytes_total{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}[1m]) * (100 + go_gc_gogc_percent{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}) / (8192 * go_gc_gogc_percent{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}) / 1.7e6)
         aggregations:
         - Max
         - Perc99
@@ -922,7 +946,9 @@ steps:
       dimensions:
       - endpoint
       queries:
-      - query: go_memstats_heap_inuse_bytes{job="master"}
+      - query: |
+          max by (endpoint) (go_memstats_heap_inuse_bytes{job="master", endpoint=~"kube-controller-manager|kube-scheduler"})
+          or go_memstats_heap_inuse_bytes{job="master", endpoint!~"kube-controller-manager|kube-scheduler"}
         aggregations:
         - Max
         - Perc99
