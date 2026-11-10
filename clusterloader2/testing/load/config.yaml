@@ -69,6 +69,12 @@
 {{$schedulerThroughputNamespaces := IfThenElse $IS_SMALL_CLUSTER 1 $schedulerThroughputNamespaces}}
 # END scheduler-throughput section
 
+{{$ENABLE_INDEXED_JOB_BURST := DefaultParam .CL2_ENABLE_INDEXED_JOB_BURST false}}
+{{$totalIndexedJobBurstPods := DefaultParam .CL2_INDEXED_JOB_BURST_TOTAL_PODS (MaxInt (MultiplyInt 2 $MIN_PODS_IN_SMALL_CLUSTERS) .Nodes)}}
+{{$indexedJobBurstParallelism := DefaultParam .CL2_INDEXED_JOB_BURST_PARALLELISM $BIG_GROUP_SIZE}}
+{{$indexedJobBurstJobsPerNamespace := DefaultParam .CL2_INDEXED_JOB_BURST_JOBS_PER_NAMESPACE 1}}
+{{$indexedJobBurstNamespaces := IfThenElse (and (not $IS_SMALL_CLUSTER) $ENABLE_INDEXED_JOB_BURST) (MaxInt 1 (DivideInt $totalIndexedJobBurstPods (MultiplyInt $indexedJobBurstParallelism $indexedJobBurstJobsPerNamespace))) 0}}
+
 {{$CREATE_OPERATION_TIMEOUT_BUFFER := DefaultParam .CL2_CREATE_OPERATION_TIMEOUT_BUFFER 900}}
 {{$UPDATE_OPERATION_TIMEOUT_BUFFER := DefaultParam .CL2_UPDATE_OPERATION_TIMEOUT_BUFFER 900}}
 {{$DELETE_OPERATION_TIMEOUT_BUFFER := DefaultParam .CL2_DELETE_OPERATION_TIMEOUT_BUFFER 900}}
@@ -89,7 +95,7 @@
 
 name: load
 namespace:
-  number: {{AddInt $namespaces $schedulerThroughputNamespaces}}
+  number: {{AddInt $namespaces $schedulerThroughputNamespaces $indexedJobBurstNamespaces}}
 tuningSets:
 - name: Sequence
   parallelismLimitedLoad:
@@ -306,6 +312,17 @@ steps:
       schedulerThroughputNamespaces: {{$schedulerThroughputNamespaces}}
       schedulerThroughputPodsPerDeployment: {{$schedulerThroughputPodsPerDeployment}}
 # END scheduler throughput
+{{end}}
+
+{{if and (not $IS_SMALL_CLUSTER) $ENABLE_INDEXED_JOB_BURST}}
+- module:
+    path: modules/indexed-job-burst.yaml
+    params:
+      namespaces: {{AddInt $namespaces $schedulerThroughputNamespaces}}
+      indexedJobBurstNamespaces: {{$indexedJobBurstNamespaces}}
+      jobsPerNamespace: {{$indexedJobBurstJobsPerNamespace}}
+      parallelism: {{$indexedJobBurstParallelism}}
+      jobImage: {{$latencyPodImage}}
 {{end}}
 
 {{if not $IS_SMALL_CLUSTER}}

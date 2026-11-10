@@ -1,0 +1,155 @@
+## Input params
+{{$namespaces := .namespaces}}
+{{$indexedJobBurstNamespaces := .indexedJobBurstNamespaces}}
+{{$jobsPerNamespace := .jobsPerNamespace}}
+{{$parallelism := .parallelism}}
+{{$jobImage := DefaultParam .jobImage (Concat .ImageRegistry "/pause:3.9")}}
+
+## CL2 params
+{{$CHECK_IF_PODS_ARE_UPDATED := DefaultParam .CL2_CHECK_IF_PODS_ARE_UPDATED true}}
+{{$INDEXED_JOB_BURST_TIMEOUT := DefaultParam .CL2_INDEXED_JOB_BURST_TIMEOUT "20m"}}
+
+steps:
+- name: Starting indexed job burst measurements
+  measurements:
+  - Identifier: IndexedJobBurstPodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: group = indexed-job-burst, generation = initial
+      threshold: 1h
+  - Identifier: WaitForIndexedJobBurst
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: start
+      checkIfPodsAreUpdated: {{$CHECK_IF_PODS_ARE_UPDATED}}
+      apiVersion: batch/v1
+      kind: Job
+      labelSelector: group = indexed-job-burst
+      operationTimeout: {{$INDEXED_JOB_BURST_TIMEOUT}}
+
+- name: Creating headless services for indexed job burst
+  phases:
+  - namespaceRange:
+      min: {{AddInt $namespaces 1}}
+      max: {{AddInt $namespaces $indexedJobBurstNamespaces}}
+    replicasPerNamespace: {{$jobsPerNamespace}}
+    tuningSet: default
+    objectBundle:
+    - basename: indexed-job-burst-svc
+      objectTemplatePath: /modules/services/service.yaml
+      templateFillMap:
+        HeadlessService: true
+
+- name: Creating indexed job burst
+  phases:
+  - namespaceRange:
+      min: {{AddInt $namespaces 1}}
+      max: {{AddInt $namespaces $indexedJobBurstNamespaces}}
+    replicasPerNamespace: {{$jobsPerNamespace}}
+    tuningSet: default
+    objectBundle:
+    - basename: indexed-job-burst
+      objectTemplatePath: /modules/reconcile-objects/job.yaml
+      templateFillMap:
+        Group: indexed-job-burst
+        Generation: initial
+        SvcName: indexed-job-burst-svc
+        EnableIndexedJobs: true
+        Completions: {{$parallelism}}
+        ReplicasMin: {{$parallelism}}
+        ReplicasMax: {{$parallelism}}
+        Image: {{$jobImage}}
+
+- name: Waiting for indexed job burst pods to be running
+  measurements:
+  - Identifier: WaitForIndexedJobBurst
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Collecting indexed job burst measurements
+  measurements:
+  - Identifier: IndexedJobBurstPodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: gather
+
+- name: Starting indexed job restart measurements
+  measurements:
+  - Identifier: IndexedJobRestartPodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: start
+      labelSelector: group = indexed-job-burst, generation = recovery
+      threshold: 1h
+
+# Job pod templates are immutable, so gang restart deletes the initial Jobs and
+# creates replacement Jobs in one step so tracking-finalizer drains overlap with scheduling.
+- name: Replacing indexed job burst
+  phases:
+  - namespaceRange:
+      min: {{AddInt $namespaces 1}}
+      max: {{AddInt $namespaces $indexedJobBurstNamespaces}}
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: indexed-job-burst
+      objectTemplatePath: /modules/reconcile-objects/job.yaml
+  - namespaceRange:
+      min: {{AddInt $namespaces 1}}
+      max: {{AddInt $namespaces $indexedJobBurstNamespaces}}
+    replicasPerNamespace: {{$jobsPerNamespace}}
+    tuningSet: default
+    objectBundle:
+    - basename: indexed-job-burst-v2
+      objectTemplatePath: /modules/reconcile-objects/job.yaml
+      templateFillMap:
+        Group: indexed-job-burst
+        Generation: recovery
+        SvcName: indexed-job-burst-svc
+        EnableIndexedJobs: true
+        Completions: {{$parallelism}}
+        ReplicasMin: {{$parallelism}}
+        ReplicasMax: {{$parallelism}}
+        Image: {{$jobImage}}
+
+- name: Waiting for indexed job replacement to converge
+  measurements:
+  - Identifier: WaitForIndexedJobBurst
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather
+
+- name: Collecting indexed job restart measurements
+  measurements:
+  - Identifier: IndexedJobRestartPodStartupLatency
+    Method: PodStartupLatency
+    Params:
+      action: gather
+
+- name: Deleting indexed job burst and headless services
+  phases:
+  - namespaceRange:
+      min: {{AddInt $namespaces 1}}
+      max: {{AddInt $namespaces $indexedJobBurstNamespaces}}
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: indexed-job-burst-v2
+      objectTemplatePath: /modules/reconcile-objects/job.yaml
+  - namespaceRange:
+      min: {{AddInt $namespaces 1}}
+      max: {{AddInt $namespaces $indexedJobBurstNamespaces}}
+    replicasPerNamespace: 0
+    tuningSet: default
+    objectBundle:
+    - basename: indexed-job-burst-svc
+      objectTemplatePath: /modules/services/service.yaml
+
+- name: Waiting for indexed job burst pods to be deleted
+  measurements:
+  - Identifier: WaitForIndexedJobBurst
+    Method: WaitForControlledPodsRunning
+    Params:
+      action: gather

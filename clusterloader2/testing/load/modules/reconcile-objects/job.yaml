@@ -8,26 +8,41 @@
   {{DivideInt 1 0}}
 {{end}}
 {{$RealisticPod20KB := and $RealisticPod (eq $RealisticPodSizeKB 20)}}
+{{$Group := DefaultParam .Group "load"}}
+{{$EnableIndexedJobs := DefaultParam .EnableIndexedJobs (DefaultParam .CL2_ENABLE_INDEXED_JOBS false)}}
+{{$SvcName := DefaultParam .SvcName ""}}
+{{$Generation := DefaultParam .Generation ""}}
+{{$replicas := RandIntRange .ReplicasMin .ReplicasMax}}
+{{$completions := IfThenElse $EnableIndexedJobs $replicas .Completions}}
 
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{.Name}}
   labels:
-    group: load
+    group: {{$Group}}
 spec:
   backoffLimit: {{.ReplicasMin}}
   manualSelector: true
-  parallelism: {{RandIntRange .ReplicasMin .ReplicasMax}}
-  completions: {{.Completions}}
+  parallelism: {{$replicas}}
+  completions: {{$completions}}
+{{if $EnableIndexedJobs}}
+  completionMode: Indexed
+{{end}}
   selector:
     matchLabels:
       name: {{.Name}}
   template:
     metadata:
       labels:
-        group: load
+        group: {{$Group}}
         name: {{.Name}}
+{{if $SvcName}}
+        svc: {{$SvcName}}-{{.Index}}
+{{end}}
+{{if $Generation}}
+        generation: {{$Generation}}
+{{end}}
 {{if $RealisticPod }}
         app.kubernetes.io/name: "payment-service"
         app.kubernetes.io/instance: "payment-service-primary"
@@ -49,6 +64,9 @@ spec:
         argocd.argoproj.io/hook-delete-policy: "HookSucceeded"
 {{end}}
     spec:
+      {{if $EnableIndexedJobs}}
+      subdomain: {{if $SvcName}}{{$SvcName}}-{{.Index}}{{else}}{{.Name}}{{end}}
+      {{end}}
       {{if $RuntimeClassName}}
       runtimeClassName: {{$RuntimeClassName}}
       {{end}}
