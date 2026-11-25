@@ -31,7 +31,7 @@ type AWSProvider struct {
 func NewAWSProvider(_ map[string]string) Provider {
 	return &AWSProvider{
 		features: Features{
-			ShouldPrometheusScrapeApiserverOnly: true,
+			ShouldPrometheusScrapeApiserverOnly: false,
 			ShouldScrapeKubeProxy:               true,
 			SupportAccessAPIServerPprofEndpoint: true,
 			SupportEnablePrometheusServer:       true,
